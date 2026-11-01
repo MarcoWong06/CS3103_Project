@@ -1,0 +1,4 @@
+job_id arrival burst priority
+J001 0 5 3
+J002 1 2 1
+J003 2 1 2

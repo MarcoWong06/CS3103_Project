@@ -1,0 +1,18 @@
+format
+create hello.txt
+write hello.txt "Operating Systems"
+read hello.txt
+append hello.txt " project"
+read hello.txt
+stat hello.txt
+write hello.txt "OS"
+read hello.txt
+stat hello.txt
+df
+delete hello.txt
+create reused.txt
+write reused.txt "Reused"
+read reused.txt
+ls
+df
+exit

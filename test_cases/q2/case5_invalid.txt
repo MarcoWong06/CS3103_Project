@@ -1,0 +1,19 @@
+format
+create kept.txt
+write kept.txt "unchanged"
+mkdir folder
+create folder/inside.txt
+read kept.txt
+create kept.txt
+read missing.txt
+create missing/file.txt
+create kept.txt/child.txt
+rmdir folder
+rmdir /
+create nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+write kept.txt unquoted
+read kept.txt
+stat kept.txt
+ls
+df
+exit

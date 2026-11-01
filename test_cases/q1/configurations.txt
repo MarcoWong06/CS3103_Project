@@ -1,0 +1,4 @@
+case         P  W  C  K   N  M
+document     1  1  1  2   1  1
+default      3  3  2  4   5  5
+asymmetric   2  3  1  25  1  3

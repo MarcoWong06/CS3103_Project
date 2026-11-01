@@ -1,0 +1,33 @@
+
+# macOS
+.DS_Store
+
+# CLion personal settings
+.idea/
+*.iml
+
+# CMake build directories
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+
+# Compiled files
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# Project executables
+/problem1
+/problem3
+/minifs
+
+# Generated virtual disk
+virtual_disk.bin
+
+# Debugging and temporary files
+*.core
+core
+*.log

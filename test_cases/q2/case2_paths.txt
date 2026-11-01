@@ -1,0 +1,25 @@
+format
+mkdir courses
+mkdir /courses/os
+mkdir /courses/os/labs
+cd /courses/os/labs
+pwd
+create report.txt
+write report.txt "Path example"
+read /courses/os/labs/report.txt
+read ./report.txt
+cd ..
+pwd
+read labs/report.txt
+cd ./labs
+read ../labs/report.txt
+ls
+stat .
+cd /
+stat /courses/os/labs/report.txt
+delete /courses/os/labs/report.txt
+rmdir /courses/os/labs
+rmdir /courses/os
+rmdir /courses
+ls
+exit

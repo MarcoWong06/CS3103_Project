@@ -1,0 +1,9 @@
+ls
+cd /courses/os
+pwd
+read report.txt
+stat report.txt
+append report.txt " project"
+read /courses/os/report.txt
+df
+exit

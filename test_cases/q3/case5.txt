@@ -1,0 +1,6 @@
+job_id arrival burst priority
+J401 0 7 4
+J402 0 2 2
+J403 0 5 5
+J404 0 1 1
+J405 0 3 3

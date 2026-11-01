@@ -1,0 +1,6 @@
+#define NUM_PRODUCERS 1
+#define NUM_WORKERS 1
+#define NUM_CONSUMERS 1
+#define ITEMS_PER_PRODUCER 2
+#define BUFFER_A_SIZE 1
+#define BUFFER_B_SIZE 1

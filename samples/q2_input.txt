@@ -1,0 +1,7 @@
+format
+create hello.txt
+write hello.txt "Operating Systems"
+read hello.txt
+append hello.txt " project"
+read hello.txt
+exit

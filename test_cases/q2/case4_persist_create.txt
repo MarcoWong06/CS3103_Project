@@ -1,0 +1,9 @@
+format
+mkdir courses
+mkdir /courses/os
+create /courses/os/report.txt
+write /courses/os/report.txt "Operating Systems"
+cd /courses/os
+pwd
+read report.txt
+exit
