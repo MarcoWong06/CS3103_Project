@@ -102,6 +102,9 @@ case12_corrupt() {
     session "$d" $'format\ncreate a.txt\nexit\n' > /dev/null
     poke "$d" 8544 '\310\000\000\000' # entries[1].parent_id = 200
     out+=$'\n--- bad parent ---\n'$(session "$d" $'ls\nformat\nls\nexit\n')
+    session "$d" $'format\nexit\n' > /dev/null
+    poke "$d" 8484 '\001\000\000\000' # root size = 1
+    out+=$'\n--- bad root ---\n'$(session "$d" $'ls\nformat\nls\nexit\n')
     check case12_corrupt "$out" "$d"
 }
 

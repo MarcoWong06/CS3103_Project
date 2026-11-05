@@ -301,6 +301,10 @@ static int validate_one_entry(const filesystem_t *fs, int id)
     if (memchr(e->name, '\0', sizeof(e->name)) == NULL) {
         return -1; /* Not NUL-terminated: later strlen/strcmp would overrun. */
     }
+    /* Directories (the root included) own no data and have size 0. */
+    if (e->type == TYPE_DIR && (e->size != 0 || e->first_block != FAT_END)) {
+        return -1;
+    }
     if (id == ROOT_ID) {
         return (e->type == TYPE_DIR && e->parent_id == ROOT_ID &&
                 strcmp(e->name, "/") == 0) ? 0 : -1;
@@ -308,9 +312,6 @@ static int validate_one_entry(const filesystem_t *fs, int id)
     if (name_error(e->name, strlen(e->name)) != NULL ||
         e->parent_id < 0 || e->parent_id >= MAX_ENTRIES ||
         fs->entries[e->parent_id].type != TYPE_DIR) {
-        return -1;
-    }
-    if (e->type == TYPE_DIR && (e->size != 0 || e->first_block != FAT_END)) {
         return -1;
     }
     return 0;
