@@ -85,5 +85,11 @@ case11_disk_full
   the same state.
 case12_corrupt
   Truncated image, bad magic, FAT entry pointing into the metadata region and
-  an out-of-range parent_id: each reports an invalid image and rejects
-  commands without crashing; format then succeeds.
+  an out-of-range parent_id, a root with a non-zero size, a FAT cycle, a
+  file size that disagrees with its block chain and a name with no NUL
+  terminator: each reports an invalid image and rejects commands without
+  crashing; format then succeeds.
+case13_scattered
+  Interleaved appends to two files give a file non-contiguous blocks
+  (65, 67, 69); after deleting the other file a new file reuses the gaps
+  (66, 68, 70); read/stat/df are correct, also after a restart.

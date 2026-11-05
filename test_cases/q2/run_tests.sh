@@ -8,7 +8,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 Q2="$ROOT/test_cases/q2"
 BIN="$ROOT/minifs"
 DISK_BYTES=1048576
-ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full case12_corrupt"
+ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full case12_corrupt case13_scattered"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
@@ -105,7 +105,42 @@ case12_corrupt() {
     session "$d" $'format\nexit\n' > /dev/null
     poke "$d" 8484 '\001\000\000\000' # root size = 1
     out+=$'\n--- bad root ---\n'$(session "$d" $'ls\nformat\nls\nexit\n')
+    session "$d" $'format\ncreate a.txt\nwrite a.txt "'"$(rep A 300)"$'"\nexit\n' > /dev/null
+    poke "$d" 388 '\101\000'          # fat[66] -> block 65: a cycle
+    out+=$'\n--- FAT cycle ---\n'$(session "$d" $'ls\nformat\nls\nexit\n')
+    session "$d" $'format\ncreate a.txt\nwrite a.txt "x"\nexit\n' > /dev/null
+    poke "$d" 8548 '\054\001\000\000' # entries[1].size = 300 (1 block)
+    out+=$'\n--- size mismatch ---\n'$(session "$d" $'ls\nformat\nls\nexit\n')
+    session "$d" $'format\ncreate a.txt\nexit\n' > /dev/null
+    poke "$d" 8512 "$(rep N 32)"      # entries[1].name fills all 32 bytes
+    out+=$'\n--- unterminated name ---\n'$(session "$d" $'ls\nformat\nls\nexit\n')
     check case12_corrupt "$out" "$d"
+}
+
+case13_scattered() {
+    local d out x1 x2 x3; d=$(fresh_dir case13_scattered)
+    x1=$(rep 1 256); x2=$(rep 2 256); x3=$(rep 3 10)
+    out=$(session "$d" "format
+create x
+create y
+append x \"$x1\"
+append y \"$(rep Y 256)\"
+append x \"$x2\"
+append y \"$(rep Y 256)\"
+append x \"$x3\"
+read x
+stat x
+delete y
+create z
+write z \"$(rep Z 600)\"
+read z
+read x
+df
+exit
+")
+    out+=$'\n--- restart ---\n'
+    out+=$(session "$d" $'read x\nread z\ndf\nexit\n')
+    check case13_scattered "$out" "$d"
 }
 
 # ---- main ----

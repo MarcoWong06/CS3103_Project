@@ -1,9 +1,7 @@
 /*
- * CS3103 Operating Systems - Problem 2 Starter Code
- * Mini File System Simulator
- *
- * This file intentionally provides only a framework.
- * Students must implement the file-system operations marked TODO.
+ * CS3103 Operating Systems - Problem 2
+ * Mini File System Simulator (minifs): a FAT-style file system kept in a
+ * 1 MiB virtual disk file, driven by a command loop on stdin.
  */
 
 /* Build on Linux: gcc -std=c11 -Wall -Wextra problem2.c -o minifs */
@@ -49,27 +47,34 @@
 #define FAT_FREE        0x0000
 #define FAT_END         0xFFFF
 #define FAT_RESERVED    0xFFFE
+/* Printable, non-space ASCII range allowed in a name (0x21 "!" to 0x7E "~"). */
+#define NAME_CHAR_MIN   0x21
+#define NAME_CHAR_MAX   0x7E
 #define ROOT_ID         0
+#define ROOT_NAME       "/"      /* The root directory's stored name. */
 
 /* Message catalogue: error reasons and fixed startup / format lines. */
+/* Stringify a numeric constant (two levels so the macro is expanded first). */
+#define STR_(x) #x
+#define STR(x)  STR_(x)
 #define MSG_NOENT       "No such file or directory"
 #define MSG_NOTDIR      "Not a directory"
 #define MSG_ISDIR       "Is a directory"
 #define MSG_ISDIR_RMDIR "Is a directory (use rmdir)"
 #define MSG_EXISTS      "File exists"
 #define MSG_BADNAME     "Invalid name"
-#define MSG_LONGNAME    "Name too long (max 31 characters)"
+#define MSG_LONGNAME    "Name too long (max " STR(MAX_NAME_LEN) " characters)"
 #define MSG_BADPATH     "Invalid path"
 #define MSG_NOTEMPTY    "Directory not empty"
 #define MSG_RMROOT      "Cannot remove root directory"
 #define MSG_RMCWD       "Cannot remove the current directory"
-#define MSG_TABLEFULL   "Entry table full (max 128 entries)"
+#define MSG_TABLEFULL   "Entry table full (max " STR(MAX_ENTRIES) " entries)"
 #define MSG_NOSPACE_FMT "Not enough free space (need %" PRIu64 " more block(s), %u free)"
 #define MSG_IO          "disk I/O error"
 #define MSG_UNMOUNTED   "no valid file system; run 'format'"
 #define MSG_NO_FS       "No file system found; run 'format'."
 #define MSG_BAD_IMAGE   "Error: " DISK_FILE " is not a valid minifs image; run 'format'"
-#define MSG_FORMAT_OK   "Formatted " DISK_FILE ": 4096 blocks x 256 bytes (65 metadata, 4031 data)"
+#define MSG_FORMAT_OK_FMT "Formatted " DISK_FILE ": %u blocks x %u bytes (%u metadata, %u data)"
 
 /*
  * One metadata-table entry (exactly ENTRY_SIZE bytes on disk). The entry's
@@ -307,7 +312,7 @@ static int validate_one_entry(const filesystem_t *fs, int id)
     }
     if (id == ROOT_ID) {
         return (e->type == TYPE_DIR && e->parent_id == ROOT_ID &&
-                strcmp(e->name, "/") == 0) ? 0 : -1;
+                strcmp(e->name, ROOT_NAME) == 0) ? 0 : -1;
     }
     if (name_error(e->name, strlen(e->name)) != NULL ||
         e->parent_id < 0 || e->parent_id >= MAX_ENTRIES ||
@@ -524,9 +529,6 @@ static uint32_t chain_length(const filesystem_t *fs, uint16_t first)
     return count;
 }
 
-/* Largest possible file: every data block in the data region. */
-#define MAX_FILE_BYTES  ((uint64_t)(NUM_BLOCKS - DATA_START) * BLOCK_SIZE)
-
 /*
  * Purpose: number of blocks needed to hold a byte count.
  * Inputs:  byte count.
@@ -639,6 +641,9 @@ static int resize_chain(filesystem_t *fs, file_entry_t *entry, uint64_t new_bloc
     return 0;
 }
 
+/* Buffer size for the formatted "not enough free space" reason. */
+#define REASON_LEN 96
+
 /*
  * Purpose: print the "not enough free space" error.
  * Inputs:  command name, path as typed, extra blocks needed, blocks free.
@@ -647,7 +652,7 @@ static int resize_chain(filesystem_t *fs, file_entry_t *entry, uint64_t new_bloc
 static void report_no_space(const char *cmd, const char *path, uint64_t missing,
                             uint32_t free_blocks)
 {
-    char reason[96];
+    char reason[REASON_LEN];
 
     snprintf(reason, sizeof(reason), MSG_NOSPACE_FMT, missing, free_blocks);
     fs_error(cmd, path, reason);
@@ -710,7 +715,7 @@ static int write_range(filesystem_t *fs, const file_entry_t *entry, uint32_t off
  * Purpose: validate one path component used as a new entry's name.
  * Inputs:  name bytes (not necessarily NUL-terminated) and their length.
  * Returns: NULL if valid; MSG_LONGNAME if longer than MAX_NAME_LEN; MSG_BADNAME
- *          if empty, "." or "..", or containing a byte outside 0x21-0x7E or '/'.
+ *          if empty, "." or "..", or containing a byte outside NAME_CHAR_MIN..NAME_CHAR_MAX or '/'.
  */
 static const char *name_error(const char *name, size_t len)
 {
@@ -723,7 +728,7 @@ static const char *name_error(const char *name, size_t len)
     }
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)name[i];
-        if (c < 0x21 || c > 0x7E || c == '/') {
+        if (c < NAME_CHAR_MIN || c > NAME_CHAR_MAX || c == '/') {
             return MSG_BADNAME;
         }
     }
@@ -1044,7 +1049,7 @@ static int resolve_regular_file(filesystem_t *fs, const char *cmd, const char *p
     return 0;
 }
 
-/* ---------- Operations students must implement ---------- */
+/* ---------- File-system operations ---------- */
 
 /*
  * Purpose: create a fresh 1 MiB image with an empty root and mount it.
@@ -1091,7 +1096,7 @@ static int fs_format(filesystem_t *fs)
     }
 
     memset(fs->entries, 0, sizeof(fs->entries));
-    strcpy(fs->entries[ROOT_ID].name, "/");
+    strcpy(fs->entries[ROOT_ID].name, ROOT_NAME);
     fs->entries[ROOT_ID].parent_id = ROOT_ID;
     fs->entries[ROOT_ID].first_block = FAT_END;
     fs->entries[ROOT_ID].type = TYPE_DIR;
@@ -1105,7 +1110,8 @@ static int fs_format(filesystem_t *fs)
     fs->free_blocks = count_free_blocks(fs);
     fs->cwd_id = ROOT_ID;
     fs->mounted = 1;
-    printf("%s\n", MSG_FORMAT_OK);
+    printf(MSG_FORMAT_OK_FMT "\n", (unsigned)NUM_BLOCKS, (unsigned)BLOCK_SIZE,
+           (unsigned)DATA_START, (unsigned)(NUM_BLOCKS - DATA_START));
     return 0;
 }
 
@@ -1125,8 +1131,9 @@ static int fs_create(filesystem_t *fs, const char *path)
  * Inputs:  mounted state, path as typed, content (NUL-terminated, without the
  *          outer quotes).
  * Returns: 0 on success; -1 after printing an error (not found, directory,
- *          not enough free space, I/O error). On any failure the disk and
- *          metadata are as before the command.
+ *          not enough free space, I/O error). Insufficient space changes
+ *          nothing; on a host I/O error the metadata is rolled back (data
+ *          blocks already rewritten are not restored).
  */
 static int fs_write(filesystem_t *fs, const char *path, const char *content)
 {
@@ -1155,8 +1162,9 @@ static int fs_write(filesystem_t *fs, const char *path, const char *content)
  * Inputs:  mounted state, path as typed, content (NUL-terminated, without the
  *          outer quotes).
  * Returns: 0 on success; -1 after printing an error (not found, directory,
- *          not enough free space, I/O error). On any failure the disk and
- *          metadata are as before.
+ *          not enough free space, I/O error). Insufficient space changes
+ *          nothing; on a host I/O error the metadata is rolled back (data
+ *          blocks already rewritten are not restored).
  */
 static int fs_append(filesystem_t *fs, const char *path, const char *content)
 {
@@ -1310,8 +1318,6 @@ static int fs_cd(filesystem_t *fs, const char *path)
     return 0;
 }
 
-/* Print the current path; keep this representation consistent in fs_cd().
- * Prints the unmounted error instead when no valid file system is mounted. */
 /*
  * Purpose: print the absolute path of the current directory ("/" for root).
  * Inputs:  state; prints the unmounted error instead when not mounted.
@@ -1509,6 +1515,11 @@ static void execute_command(filesystem_t *fs, char *line, int *running)
     }
 }
 
+/*
+ * Purpose: program entry point: open (or detect the absence of) the virtual
+ *          disk, then read and dispatch commands from stdin until "exit" or EOF.
+ * Returns: EXIT_SUCCESS, or EXIT_FAILURE if the virtual disk cannot be opened.
+ */
 int main(void)
 {
     filesystem_t fs;
