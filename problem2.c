@@ -1003,15 +1003,38 @@ static int fs_write(filesystem_t *fs, const char *path, const char *content)
                           "write", path);
 }
 
+/*
+ * Purpose: add content to the end of a file. The free tail of the current
+ *          final block is filled before any new block is taken.
+ * Inputs:  mounted state, path as typed, content (NUL-terminated, without the
+ *          outer quotes).
+ * Returns: 0 on success; -1 after printing an error (not found, directory,
+ *          not enough free space, I/O error). On any failure the disk and
+ *          metadata are as before.
+ */
 static int fs_append(filesystem_t *fs, const char *path, const char *content)
 {
+    int id;
+    uint64_t missing = 0;
+    uint64_t new_size;
+    uint32_t old_size;
+    size_t len = strlen(content);
+    fs_snapshot_t snap;
+    file_entry_t *e;
+
     if (!require_mounted(fs, "append")) return -1;
-    (void)fs;
-    (void)path;
-    (void)content;
-    /* TODO: append content, reusing space in the current final block if possible. */
-    fprintf(stderr, "TODO: append is not implemented.\n");
-    return -1;
+    if (resolve_regular_file(fs, "append", path, MSG_ISDIR, &id) != 0) return -1;
+    e = &fs->entries[id];
+    old_size = e->size;
+    new_size = (uint64_t)old_size + (uint64_t)len;
+    snapshot_take(fs, &snap);
+    if (resize_chain(fs, e, blocks_for_bytes(new_size), &missing) != 0) {
+        report_no_space("append", path, missing, fs->free_blocks);
+        return -1;
+    }
+    e->size = (uint32_t)new_size;
+    return commit_changes(fs, &snap, write_range(fs, e, old_size, content, (uint32_t)len),
+                          "append", path);
 }
 
 /*

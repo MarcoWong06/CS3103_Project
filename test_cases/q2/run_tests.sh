@@ -8,7 +8,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 Q2="$ROOT/test_cases/q2"
 BIN="$ROOT/minifs"
 DISK_BYTES=1048576
-ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries"
+ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
@@ -52,6 +52,41 @@ case8_deep_paths() {
     for i in $(seq 127); do cmds+="mkdir $n"$'\n'"cd $n"$'\n'; abs+="/$n"; done
     cmds+=$'pwd\n'"mkdir $n"$'\ncd /\n'"stat $abs"$'\nexit\n'
     check case8_deep_paths "$(session "$d" "$cmds")" "$d"
+}
+case4_persist() {
+    local d out; d=$(fresh_dir case4_persist)
+    out=$(run_session "$d" "$Q2/case4_persist_create.txt")
+    out+=$'\n--- restart ---\n'
+    out+=$(run_session "$d" "$Q2/case4_persist_restart.txt")
+    check case4_persist "$out" "$d"
+}
+case11_disk_full() {
+    local d out; d=$(fresh_dir case11_disk_full)
+    out=$(session "$d" "format
+create keep.txt
+write keep.txt \"keep me\"
+create big.txt
+write big.txt \"$(rep A 1031424)\"
+create new.txt
+df
+write new.txt \"$(rep N 600)\"
+stat new.txt
+write keep.txt \"$(rep K 600)\"
+read keep.txt
+append big.txt \"$(rep B 257)\"
+stat big.txt
+append big.txt \"$(rep B 256)\"
+df
+write new.txt \"x\"
+delete big.txt
+write new.txt \"$(rep N 1031937)\"
+write new.txt \"$(rep N 600)\"
+stat new.txt
+exit
+")
+    out+=$'\n--- restart ---\n'
+    out+=$(session "$d" $'read keep.txt\nstat new.txt\ndf\nexit\n')
+    check case11_disk_full "$out" "$d"
 }
 
 # ---- main ----
