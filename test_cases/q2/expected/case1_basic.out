@@ -17,8 +17,8 @@ Used blocks:        66 (metadata 65 + data 1)
 Free blocks:        4030
 Metadata reserved:  65
 Reused
-NAME                             TYPE    SIZE
-reused.txt                       file       6
+NAME                             TYPE     SIZE
+reused.txt                       file        6
 Block size:         256 bytes
 Total blocks:       4096
 Used blocks:        66 (metadata 65 + data 1)

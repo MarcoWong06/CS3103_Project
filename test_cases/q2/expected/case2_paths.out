@@ -6,8 +6,8 @@ Path example
 /courses/os
 Path example
 Path example
-NAME                             TYPE    SIZE
-report.txt                       file      12
+NAME                             TYPE     SIZE
+report.txt                       file       12
 Name:     labs
 Type:     directory
 Children: 1
@@ -15,4 +15,4 @@ Name:   report.txt
 Type:   file
 Size:   12 bytes
 Blocks: 1
-NAME                             TYPE    SIZE
+NAME                             TYPE     SIZE

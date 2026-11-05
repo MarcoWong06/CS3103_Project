@@ -8,7 +8,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 Q2="$ROOT/test_cases/q2"
 BIN="$ROOT/minifs"
 DISK_BYTES=1048576
-ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full case12_corrupt case13_scattered"
+ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full case12_corrupt case13_scattered case14_format_fail"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
@@ -17,10 +17,13 @@ failures=0
 rep() { head -c "$2" /dev/zero | tr '\0' "$1"; }
 # fresh_dir NAME: print the path of a new, empty working directory
 fresh_dir() { rm -rf "${WORK:?}/$1"; mkdir -p "$WORK/$1"; printf '%s' "$WORK/$1"; }
+# normalise: drop the start-up banner and command list, strip "minifs> " prompts
+normalise() { sed -e '/^Mini File System Simulator$/,/^  exit$/d' -e 's/minifs> //g'; }
+# exit_note STATUS: name a non-zero minifs exit status, so the output diff fails
+exit_note() { [ "$1" -eq 0 ] || echo "minifs exited with status $1"; }
 # run_session DIR FILE: run minifs in DIR with FILE on stdin; print normalised output
 run_session() {
-    (cd "$1" && "$BIN" < "$2" 2>&1) |
-        sed -e '/^Mini File System Simulator$/,/^  exit$/d' -e 's/minifs> //g'
+    (cd "$1" && "$BIN" < "$2" 2>&1; exit_note $?) | normalise
 }
 # session DIR TEXT: run_session with the commands given as a string
 session() { printf '%s' "$2" > "$WORK/cmds.txt"; run_session "$1" "$WORK/cmds.txt"; }
@@ -69,6 +72,7 @@ create big.txt
 write big.txt \"$(rep A 1031424)\"
 create new.txt
 df
+ls
 write new.txt \"$(rep N 600)\"
 stat new.txt
 write keep.txt \"$(rep K 600)\"
@@ -141,6 +145,26 @@ exit
     out+=$'\n--- restart ---\n'
     out+=$(session "$d" $'read x\nread z\ndf\nexit\n')
     check case13_scattered "$out" "$d"
+}
+
+case14_format_fail() {
+    local d out pid status i fifo="$WORK/fifo14" log="$WORK/out14"
+    d=$(fresh_dir case14_format_fail)
+    rm -f "$fifo"; mkfifo "$fifo"
+    (cd "$d" && "$BIN" < "$fifo" > "$log" 2>&1) & pid=$!
+    exec 3> "$fifo"
+    printf 'format\ncreate a.txt\nwrite a.txt "kept"\npwd\n' >&3
+    # Wait for pwd's output, then make the disk path impossible to (re)create.
+    for i in $(seq 200); do grep -q '> /$' "$log" && break; sleep 0.05; done
+    mv "$d/virtual_disk.bin" "$WORK/disk14.bin"; mkdir "$d/virtual_disk.bin"
+    printf 'format\nread a.txt\nls\nexit\n' >&3
+    exec 3>&-
+    wait "$pid"; status=$?
+    rmdir "$d/virtual_disk.bin"; mv "$WORK/disk14.bin" "$d/virtual_disk.bin"
+    out=$({ cat "$log"; exit_note "$status"; } | normalise)
+    out+=$'\n--- restart ---\n'
+    out+=$(session "$d" $'read a.txt\nexit\n')
+    check case14_format_fail "$out" "$d"
 }
 
 # ---- main ----

@@ -99,6 +99,29 @@ On start-up the image is validated (size, superblock, entry table, FAT and
 every file chain); a damaged image is rejected with a message and is never
 formatted automatically.
 
+### Paths
+
+Components are separated by `/`, and empty components are ignored, so
+`a//b/` means the same as `a/b`. This includes a trailing slash after a
+regular file: `read notes.txt/` reads `notes.txt`, and `create notes/` creates
+a regular file named `notes`. `.` is the current directory and `..` its
+parent; `..` at the root stays at the root.
+
+### Failure behaviour
+
+- A command that fails a check (missing path, bad or duplicate name, entry
+  table full, not enough free space, directory not empty, and so on) changes
+  nothing, in memory or on disk.
+- If reading or writing `virtual_disk.bin` itself fails during a command, the
+  metadata (FAT, entry table and free-block count) is rolled back in memory
+  and written again. File data overwritten in place is not restored, so a
+  failed `write` can leave the file at its old size holding a mix of new and
+  old bytes. `append` rewrites the existing bytes unchanged, so a failed
+  `append` leaves the file reading as before. If writing the rolled-back
+  metadata also fails, the next start-up may reject the image.
+- If `format` cannot open `virtual_disk.bin`, the current file system stays
+  mounted and unchanged.
+
 ### Running the Problem 2 tests
 
 Tests run on Linux, from the repository root:

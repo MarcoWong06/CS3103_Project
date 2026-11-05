@@ -5,6 +5,10 @@ Total blocks:       4096
 Used blocks:        4095 (metadata 65 + data 4030)
 Free blocks:        1
 Metadata reserved:  65
+NAME                             TYPE     SIZE
+big.txt                          file  1031424
+keep.txt                         file        7
+new.txt                          file        0
 Error: write new.txt: Not enough free space (need 3 more block(s), 1 free)
 Name:   new.txt
 Type:   file

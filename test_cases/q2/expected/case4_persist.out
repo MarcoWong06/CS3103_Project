@@ -3,8 +3,8 @@ Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
 /courses/os
 Operating Systems
 --- restart ---
-NAME                             TYPE    SIZE
-courses                          dir        -
+NAME                             TYPE     SIZE
+courses                          dir         -
 /courses/os
 Operating Systems
 Name:   report.txt

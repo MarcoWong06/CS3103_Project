@@ -38,9 +38,9 @@ Name:   one.txt
 Type:   file
 Size:   257 bytes
 Blocks: 2
-NAME                             TYPE    SIZE
-docs                             dir        -
-one.txt                          file     257
+NAME                             TYPE     SIZE
+docs                             dir         -
+one.txt                          file      257
 Block size:         256 bytes
 Total blocks:       4096
 Used blocks:        67 (metadata 65 + data 2)

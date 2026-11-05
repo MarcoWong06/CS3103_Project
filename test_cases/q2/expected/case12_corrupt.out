@@ -12,24 +12,24 @@ Error: read: no valid file system; run 'format'
 Error: virtual_disk.bin is not a valid minifs image; run 'format'
 Error: ls: no valid file system; run 'format'
 Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
-NAME                             TYPE    SIZE
+NAME                             TYPE     SIZE
 --- bad root ---
 Error: virtual_disk.bin is not a valid minifs image; run 'format'
 Error: ls: no valid file system; run 'format'
 Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
-NAME                             TYPE    SIZE
+NAME                             TYPE     SIZE
 --- FAT cycle ---
 Error: virtual_disk.bin is not a valid minifs image; run 'format'
 Error: ls: no valid file system; run 'format'
 Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
-NAME                             TYPE    SIZE
+NAME                             TYPE     SIZE
 --- size mismatch ---
 Error: virtual_disk.bin is not a valid minifs image; run 'format'
 Error: ls: no valid file system; run 'format'
 Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
-NAME                             TYPE    SIZE
+NAME                             TYPE     SIZE
 --- unterminated name ---
 Error: virtual_disk.bin is not a valid minifs image; run 'format'
 Error: ls: no valid file system; run 'format'
 Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
-NAME                             TYPE    SIZE
+NAME                             TYPE     SIZE

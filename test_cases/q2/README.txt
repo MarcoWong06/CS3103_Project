@@ -93,3 +93,10 @@ case13_scattered
   Interleaved appends to two files give a file non-contiguous blocks
   (65, 67, 69); after deleting the other file a new file reuses the gaps
   (66, 68, 70); read/stat/df are correct, also after a restart.
+case14_format_fail
+  Mid-session, virtual_disk.bin is replaced by a directory so format cannot
+  open it: format reports an I/O error and the mounted file system stays
+  usable; after the original disk is put back, a restart reads the same file.
+
+A non-zero minifs exit status adds a "minifs exited with status N" line to
+the output, so the case fails.

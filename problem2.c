@@ -52,6 +52,11 @@
 #define NAME_CHAR_MAX   0x7E
 #define ROOT_ID         0
 #define ROOT_NAME       "/"      /* The root directory's stored name. */
+/* Width of the ls SIZE column: the digits of the largest possible file,
+ * (NUM_BLOCKS - DATA_START) * BLOCK_SIZE = 1031936. */
+#define LS_SIZE_WIDTH   7
+_Static_assert((NUM_BLOCKS - DATA_START) * BLOCK_SIZE < 10000000,
+               "LS_SIZE_WIDTH must fit the largest file size");
 
 /* Message catalogue: error reasons and fixed startup / format lines. */
 /* Stringify a numeric constant (two levels so the macro is expanded first). */
@@ -501,6 +506,11 @@ static int open_virtual_disk(filesystem_t *fs)
     return 0;
 }
 
+/*
+ * Purpose: close the virtual disk file if one is open.
+ * Inputs:  state.
+ * Side effects: fclose flushes buffered writes; fs->disk becomes NULL.
+ */
 static void close_virtual_disk(filesystem_t *fs)
 {
     if (fs->disk != NULL) {
@@ -586,7 +596,8 @@ static void free_chain(filesystem_t *fs, uint16_t first)
  * Inputs:  state, the file entry, wanted block count, output for the shortfall.
  * Returns: 0 on success. -1 if growing needs more blocks than are free: then
  *          *missing is the number of extra blocks required and nothing at all
- *          has been changed. Growth links new blocks at the tail (and sets
+ *          has been changed (blocks linked before an allocation failure are
+ *          released again). Growth links new blocks at the tail (and sets
  *          first_block if the chain was empty); shrinking ends the chain after
  *          block new_blocks, frees the rest, and sets first_block = FAT_END
  *          when new_blocks is 0. Data in the blocks is not touched.
@@ -612,7 +623,12 @@ static int resize_chain(filesystem_t *fs, file_entry_t *entry, uint64_t new_bloc
             uint16_t fresh;
 
             if (alloc_block(fs, &fresh) != 0) {
-                *missing = new_blocks - i;
+                /* The FAT had fewer free blocks than free_blocks said: shrink
+                 * back to the original length so the chain is unchanged. */
+                uint64_t unused;
+
+                (void)resize_chain(fs, entry, have, &unused);
+                *missing = new_blocks - have;
                 return -1;
             }
             if (tail == FAT_END) {
@@ -1053,21 +1069,24 @@ static int resolve_regular_file(filesystem_t *fs, const char *cmd, const char *p
 
 /*
  * Purpose: create a fresh 1 MiB image with an empty root and mount it.
- * Inputs:  state (any previously open disk is closed and truncated).
- * Returns: 0 on success (prints the format line); -1 on I/O failure, leaving
- *          the file system unmounted after printing a disk I/O error.
+ * Inputs:  state (any previously open disk is truncated, then closed).
+ * Returns: 0 on success (prints the format line); -1 after printing a disk
+ *          I/O error. If the disk file cannot be opened, nothing changes and
+ *          a mounted file system stays mounted; a failure after that leaves
+ *          the file system unmounted.
  */
 static int fs_format(filesystem_t *fs)
 {
     uint8_t zero[BLOCK_SIZE];
+    FILE *fresh = fopen(DISK_FILE, "w+b");
 
-    fs->mounted = 0;
-    close_virtual_disk(fs);
-    fs->disk = fopen(DISK_FILE, "w+b");
-    if (fs->disk == NULL) {
+    if (fresh == NULL) {
         fs_error("format", NULL, MSG_IO);
         return -1;
     }
+    fs->mounted = 0;
+    close_virtual_disk(fs);
+    fs->disk = fresh;
 
     memset(zero, 0, sizeof(zero));
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
@@ -1331,7 +1350,11 @@ static void fs_pwd(const filesystem_t *fs)
     printf("%s\n", path);
 }
 
-/* qsort comparator: order entry pointers by name with strcmp. */
+/*
+ * Purpose: qsort comparator that orders entry pointers by name.
+ * Inputs:  two pointers to (const file_entry_t *) elements.
+ * Returns: strcmp of the two names: negative, 0 or positive.
+ */
 static int compare_entry_names(const void *a, const void *b)
 {
     const file_entry_t *ea = *(const file_entry_t *const *)a;
@@ -1357,12 +1380,13 @@ static int fs_ls(filesystem_t *fs)
         }
     }
     qsort(children, count, sizeof(children[0]), compare_entry_names);
-    printf("%-32s %-5s %6s\n", "NAME", "TYPE", "SIZE");
+    printf("%-32s %-5s %*s\n", "NAME", "TYPE", LS_SIZE_WIDTH, "SIZE");
     for (size_t i = 0; i < count; ++i) {
         if (children[i]->type == TYPE_DIR) {
-            printf("%-32s %-5s %6s\n", children[i]->name, "dir", "-");
+            printf("%-32s %-5s %*s\n", children[i]->name, "dir", LS_SIZE_WIDTH, "-");
         } else {
-            printf("%-32s %-5s %6u\n", children[i]->name, "file", children[i]->size);
+            printf("%-32s %-5s %*u\n", children[i]->name, "file", LS_SIZE_WIDTH,
+                   children[i]->size);
         }
     }
     return 0;
@@ -1518,7 +1542,8 @@ static void execute_command(filesystem_t *fs, char *line, int *running)
 /*
  * Purpose: program entry point: open (or detect the absence of) the virtual
  *          disk, then read and dispatch commands from stdin until "exit" or EOF.
- * Returns: EXIT_SUCCESS, or EXIT_FAILURE if the virtual disk cannot be opened.
+ * Returns: EXIT_SUCCESS, or EXIT_FAILURE if the virtual disk cannot be opened
+ *          or reading a command from stdin fails.
  */
 int main(void)
 {

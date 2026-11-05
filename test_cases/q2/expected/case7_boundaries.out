@@ -27,12 +27,12 @@ Error: rmdir aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: Not a directory
 Error: mkdir dir1/sub: File exists
 Error: cd cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc: No such file or directory
 Error: mkdir dir1/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc: Name too long (max 31 characters)
-NAME                             TYPE    SIZE
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  file       0
-dir1                             dir        -
-NAME                             TYPE    SIZE
-sub                              dir        -
-sub2                             file       0
+NAME                             TYPE     SIZE
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  file        0
+dir1                             dir         -
+NAME                             TYPE     SIZE
+sub                              dir         -
+sub2                             file        0
 Block size:         256 bytes
 Total blocks:       4096
 Used blocks:        65 (metadata 65 + data 0)

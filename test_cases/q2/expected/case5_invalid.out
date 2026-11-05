@@ -14,9 +14,9 @@ Name:   kept.txt
 Type:   file
 Size:   9 bytes
 Blocks: 1
-NAME                             TYPE    SIZE
-folder                           dir        -
-kept.txt                         file       9
+NAME                             TYPE     SIZE
+folder                           dir         -
+kept.txt                         file        9
 Block size:         256 bytes
 Total blocks:       4096
 Used blocks:        66 (metadata 65 + data 1)
