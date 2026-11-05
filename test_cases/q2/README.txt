@@ -51,3 +51,39 @@ completing the relevant TODOs. These examples do not cover the entire testing
 section. In particular, test disk exhaustion and a failed multi-block write
 using your documented allocation layout and file capacity; verify that a
 failed operation leaves existing content, metadata and free-space state intact.
+
+------------------------------------------------------------------------
+Additional regression cases (minifs implementation)
+
+Run from the repository root on Linux (for example in Docker):
+  bash test_cases/q2/run_tests.sh              all cases
+  bash test_cases/q2/run_tests.sh case7_boundaries case12_corrupt
+Each case runs in a fresh directory; its output is compared with
+test_cases/q2/expected/<case>.out and virtual_disk.bin must stay 1 MiB.
+
+case0_format
+  Every command before format on a missing disk reports an error; format; df;
+  restart; df; re-format.
+case7_boundaries.txt
+  31-character name accepted, 32 rejected; ".", ".." and "/" rejected as new
+  names; cd .. at the root; cd into a file; rmdir of ., the current
+  directory, the root, a non-empty directory and a file; 300-character path
+  component; df unchanged by the failures.
+case8_deep_paths
+  127 nested 31-character directories, pwd of the deepest, entry-table
+  exhaustion, stat by the full absolute path.
+case9_file_boundaries.txt
+  read/write/delete on a directory or missing file fail; empty-file read and
+  stat; write "" frees all blocks; spaces and quotes stored byte for byte;
+  freed blocks are reused.
+case10_append.txt
+  append to a missing file or a directory fails; append to an empty file;
+  tail fill crossing a block boundary; tail fill that exactly fills a block.
+case11_disk_full
+  Fill the disk to one free block; oversized write/append fail without
+  changing anything; exact fit succeeds; delete frees space; restart shows
+  the same state.
+case12_corrupt
+  Truncated image, bad magic, FAT entry pointing into the metadata region and
+  an out-of-range parent_id: each reports an invalid image and rejects
+  commands without crashing; format then succeeds.

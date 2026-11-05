@@ -281,11 +281,153 @@ static uint32_t count_free_blocks(const filesystem_t *fs)
     return count;
 }
 
+/* Helpers defined later in the file but needed by the mount-time validator. */
+static const char *name_error(const char *name, size_t len);
+static uint64_t blocks_for_bytes(uint64_t bytes);
+
+/*
+ * Purpose: check one live entry in isolation (type-specific shape, name,
+ *          parent range and parent type).
+ * Inputs:  loaded state, entry id of a live entry.
+ * Returns: 0 if sound, -1 otherwise. Reads only inside fs->entries.
+ */
+static int validate_one_entry(const filesystem_t *fs, int id)
+{
+    const file_entry_t *e = &fs->entries[id];
+
+    if (e->type != TYPE_FILE && e->type != TYPE_DIR) {
+        return -1;
+    }
+    if (memchr(e->name, '\0', sizeof(e->name)) == NULL) {
+        return -1; /* Not NUL-terminated: later strlen/strcmp would overrun. */
+    }
+    if (id == ROOT_ID) {
+        return (e->type == TYPE_DIR && e->parent_id == ROOT_ID &&
+                strcmp(e->name, "/") == 0) ? 0 : -1;
+    }
+    if (name_error(e->name, strlen(e->name)) != NULL ||
+        e->parent_id < 0 || e->parent_id >= MAX_ENTRIES ||
+        fs->entries[e->parent_id].type != TYPE_DIR) {
+        return -1;
+    }
+    if (e->type == TYPE_DIR && (e->size != 0 || e->first_block != FAT_END)) {
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Purpose: validate the whole entry table: every live entry is sound, names
+ *          are unique within a directory, and every parent chain reaches the
+ *          root without a cycle.
+ * Inputs:  loaded state.
+ * Returns: 0 if the table is sound, -1 otherwise.
+ */
+static int validate_entries(const filesystem_t *fs)
+{
+    for (int id = 0; id < MAX_ENTRIES; ++id) {
+        if (fs->entries[id].type == TYPE_UNUSED && id != ROOT_ID) {
+            continue;
+        }
+        if (validate_one_entry(fs, id) != 0) {
+            return -1;
+        }
+    }
+    /* Every live parent_id is now in range and names a live directory. */
+    for (int id = 1; id < MAX_ENTRIES; ++id) {
+        if (fs->entries[id].type == TYPE_UNUSED) {
+            continue;
+        }
+        for (int other = 1; other < id; ++other) {
+            if (fs->entries[other].type != TYPE_UNUSED &&
+                fs->entries[other].parent_id == fs->entries[id].parent_id &&
+                strcmp(fs->entries[other].name, fs->entries[id].name) == 0) {
+                return -1;
+            }
+        }
+        int cur = id;
+        int steps = 0;
+        while (cur != ROOT_ID && steps <= MAX_ENTRIES) {
+            cur = fs->entries[cur].parent_id;
+            ++steps;
+        }
+        if (cur != ROOT_ID) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Purpose: validate the FAT against the entry table: reserved metadata
+ *          blocks, in-range values, every file chain acyclic, unshared and of
+ *          length ceil(size / BLOCK_SIZE), and no orphan data block.
+ * Inputs:  loaded state whose entry table already passed validate_entries.
+ * Returns: 0 if consistent, -1 otherwise.
+ */
+static int validate_fat(const filesystem_t *fs)
+{
+    int owner[NUM_BLOCKS]; /* Entry id owning each block, or -1. */
+
+    for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+        uint16_t v = fs->fat[b];
+        owner[b] = -1;
+        if (b < DATA_START ? v != FAT_RESERVED
+                           : (v != FAT_FREE && v != FAT_END &&
+                              (v < DATA_START || v >= NUM_BLOCKS))) {
+            return -1;
+        }
+    }
+    for (int id = 0; id < MAX_ENTRIES; ++id) {
+        const file_entry_t *e = &fs->entries[id];
+        if (e->type != TYPE_FILE) {
+            continue;
+        }
+        uint64_t need = blocks_for_bytes(e->size);
+        uint64_t count = 0;
+        uint32_t block = e->first_block;
+        while (block != FAT_END) {
+            /* Metadata, out-of-range, shared or revisited (cyclic) blocks. */
+            if (block < DATA_START || block >= NUM_BLOCKS || owner[block] != -1) {
+                return -1;
+            }
+            owner[block] = id;
+            if (++count > need) {
+                return -1;
+            }
+            block = fs->fat[block];
+        }
+        if (count != need) {
+            return -1;
+        }
+    }
+    for (uint32_t b = DATA_START; b < NUM_BLOCKS; ++b) {
+        if (fs->fat[b] != FAT_FREE && owner[b] == -1) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Purpose: check every metadata rule of the design (root shape; entry types,
+ *          names, parents, unique names, parent chains; FAT values; file
+ *          chains; directories own no blocks; no orphan block).
+ * Inputs:  state with the FAT and entry table loaded.
+ * Returns: 0 if all rules hold, -1 otherwise. Never reads out of bounds, so
+ *          the rest of the program may trust any image that validates.
+ */
+static int validate_metadata(const filesystem_t *fs)
+{
+    return (validate_entries(fs) == 0 && validate_fat(fs) == 0) ? 0 : -1;
+}
+
 /*
  * Purpose: load and validate the metadata of the open disk file.
  * Inputs:  state with fs->disk open.
  * Returns: 0 and mounts (mounted, free_blocks, cwd_id = ROOT_ID) if the file is exactly
- *          DISK_SIZE bytes and every superblock field matches its constant;
+ *          DISK_SIZE bytes, every superblock field matches its constant and
+ *          validate_metadata() accepts the FAT and entry table;
  *          otherwise -1 and the file system stays unmounted.
  */
 static int load_metadata(filesystem_t *fs)
@@ -311,6 +453,9 @@ static int load_metadata(filesystem_t *fs)
         fread(fs->fat, 1, sizeof(fs->fat), fs->disk) != sizeof(fs->fat) ||
         fseek(fs->disk, (long)ENTRY_START * BLOCK_SIZE, SEEK_SET) != 0 ||
         fread(fs->entries, 1, sizeof(fs->entries), fs->disk) != sizeof(fs->entries)) {
+        return -1;
+    }
+    if (validate_metadata(fs) != 0) {
         return -1;
     }
     fs->free_blocks = count_free_blocks(fs);

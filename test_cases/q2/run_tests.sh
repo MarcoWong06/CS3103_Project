@@ -8,7 +8,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 Q2="$ROOT/test_cases/q2"
 BIN="$ROOT/minifs"
 DISK_BYTES=1048576
-ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full"
+ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full case12_corrupt"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
@@ -87,6 +87,22 @@ exit
     out+=$'\n--- restart ---\n'
     out+=$(session "$d" $'read keep.txt\nstat new.txt\ndf\nexit\n')
     check case11_disk_full "$out" "$d"
+}
+
+case12_corrupt() {
+    local d out; d=$(fresh_dir case12_corrupt)
+    session "$d" $'format\nexit\n' > /dev/null
+    truncate -s 1000 "$d/virtual_disk.bin"
+    out=$'--- truncated ---\n'$(session "$d" $'ls\nformat\nexit\n')
+    session "$d" $'format\nexit\n' > /dev/null; poke "$d" 0 'XXXX'
+    out+=$'\n--- bad magic ---\n'$(session "$d" $'ls\nexit\n')
+    session "$d" $'format\ncreate a.txt\nwrite a.txt "x"\nexit\n' > /dev/null
+    poke "$d" 386 '\001\000'          # fat[65] -> block 1 (metadata)
+    out+=$'\n--- bad FAT ---\n'$(session "$d" $'read a.txt\nexit\n')
+    session "$d" $'format\ncreate a.txt\nexit\n' > /dev/null
+    poke "$d" 8544 '\310\000\000\000' # entries[1].parent_id = 200
+    out+=$'\n--- bad parent ---\n'$(session "$d" $'ls\nformat\nls\nexit\n')
+    check case12_corrupt "$out" "$d"
 }
 
 # ---- main ----
