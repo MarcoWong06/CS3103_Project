@@ -8,9 +8,10 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 Q2="$ROOT/test_cases/q2"
 BIN="$ROOT/minifs"
 DISK_BYTES=1048576
-ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full case12_corrupt case13_scattered case14_format_fail"
+ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries case1_basic case3_blocks case4_persist case10_append case11_disk_full case12_corrupt case13_scattered case14_format_fail case15_write_fault case16_flush_fault"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+FAULT_SO="$WORK/fault_fwrite.so"   # LD_PRELOAD fault injector, built below on Linux
 failures=0
 
 # rep CHAR N: print CHAR repeated N times, no newline
@@ -27,6 +28,15 @@ run_session() {
 }
 # session DIR TEXT: run_session with the commands given as a string
 session() { printf '%s' "$2" > "$WORK/cmds.txt"; run_session "$1" "$WORK/cmds.txt"; }
+# fault_session DIR OFFSET TEXT: session, but the first disk fwrite that starts
+# at byte OFFSET fails with EIO (once per run; see fault_fwrite.c)
+fault_session() {
+    printf '%s' "$3" > "$WORK/cmds.txt"
+    (cd "$1" && LD_PRELOAD="$FAULT_SO" MINIFS_FAIL_AT="$2" "$BIN" < "$WORK/cmds.txt" 2>&1
+     exit_note $?) | normalise
+}
+# fault_ready NAME: succeed if the fault injector was built, else report NAME skipped
+fault_ready() { [ -f "$FAULT_SO" ] && return 0; echo "SKIP $1 (needs Linux LD_PRELOAD)"; return 1; }
 # poke DIR OFFSET ESCAPES: overwrite bytes (printf escapes) at OFFSET of DIR's disk
 poke() { printf "$3" | dd of="$1/virtual_disk.bin" bs=1 seek="$2" conv=notrunc status=none; }
 # check NAME OUTPUT DIR: diff OUTPUT with expected/NAME.out; DIR's disk must be 1 MiB
@@ -167,10 +177,80 @@ case14_format_fail() {
     check case14_format_fail "$out" "$d"
 }
 
+# Data-write failures: new.txt's second new block (67) and keep.txt's new tail
+# block (66) fail to write. Each command is rolled back (size, block chain and
+# free count), in session and after restart, and the blocks are reused.
+case15_write_fault() {
+    local d out
+    fault_ready case15_write_fault || return 0
+    d=$(fresh_dir case15_write_fault)
+    session "$d" $'format\ncreate keep.txt\nwrite keep.txt "keep"\ncreate new.txt\nexit\n' > /dev/null
+    out=$'--- write: block 67 fails ---\n'
+    out+=$(fault_session "$d" $((67 * 256)) "df
+write new.txt \"$(rep N 300)\"
+stat new.txt
+df
+exit
+")
+    out+=$'\n--- append: block 66 fails ---\n'
+    out+=$(fault_session "$d" $((66 * 256)) "append keep.txt \"$(rep A 300)\"
+read keep.txt
+stat keep.txt
+df
+exit
+")
+    out+=$'\n--- restart ---\n'
+    out+=$(session "$d" "stat new.txt
+read keep.txt
+df
+write new.txt \"$(rep N 300)\"
+append keep.txt \"$(rep A 300)\"
+stat new.txt
+stat keep.txt
+df
+exit
+")
+    check case15_write_fault "$out" "$d"
+}
+
+# Metadata-flush failures: the entry-table write (block 33, byte 8448) fails
+# after the new FAT is already written, for write, delete and mkdir. The
+# rollback rewrites the old FAT and entries, so nothing changes in session or
+# after restart; then each command succeeds.
+case16_flush_fault() {
+    local d out entries=$((33 * 256))
+    fault_ready case16_flush_fault || return 0
+    d=$(fresh_dir case16_flush_fault)
+    session "$d" "format
+create keep.txt
+write keep.txt \"$(rep K 300)\"
+create new.txt
+exit
+" > /dev/null
+    out=$'--- write ---\n'
+    out+=$(fault_session "$d" "$entries" "df
+write new.txt \"$(rep N 600)\"
+stat new.txt
+df
+exit
+")
+    out+=$'\n--- delete ---\n'
+    out+=$(fault_session "$d" "$entries" $'delete keep.txt\nstat keep.txt\ndf\nexit\n')
+    out+=$'\n--- mkdir ---\n'
+    out+=$(fault_session "$d" "$entries" $'mkdir docs\nls\nexit\n')
+    out+=$'\n--- restart ---\n'
+    out+=$(session "$d" $'ls\nstat new.txt\nread keep.txt\ndf\nwrite new.txt "'"$(rep N 600)"$'"\ndelete keep.txt\nmkdir docs\nls\ndf\nexit\n')
+    check case16_flush_fault "$out" "$d"
+}
+
 # ---- main ----
 warnings=$(gcc -std=c11 -Wall -Wextra -pedantic -fsyntax-only "$ROOT/problem2.c" 2>&1)
 [ -z "$warnings" ] || { echo "FAIL build: warnings"; echo "$warnings"; exit 1; }
 make -s -B -C "$ROOT" minifs || { echo "FAIL build"; exit 1; }
+if [ "$(uname -s)" = Linux ]; then
+    gcc -shared -fPIC -Wall -Wextra -o "$FAULT_SO" "$Q2/fault_fwrite.c" -ldl ||
+        { echo "FAIL build: fault_fwrite.so"; exit 1; }
+fi
 for c in ${*:-$ALL_CASES}; do
     if declare -F "$c" > /dev/null; then "$c"
     elif [ -f "$Q2/$c.txt" ]; then script_case "$c"

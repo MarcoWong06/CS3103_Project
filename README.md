@@ -132,3 +132,8 @@ docker run --rm -v "$PWD":/workspace -w /workspace cs3103-clion-linux:1.0 bash t
 # selected cases
 docker run --rm -v "$PWD":/workspace -w /workspace cs3103-clion-linux:1.0 bash test_cases/q2/run_tests.sh case11_disk_full case12_corrupt
 ```
+
+`case15_write_fault` and `case16_flush_fault` test the rollback after a failed
+disk write. They use an `LD_PRELOAD` library (`test_cases/q2/fault_fwrite.c`)
+that makes one disk write fail, so they only run on Linux and are skipped on
+other systems. `problem2.c` has no test hooks.

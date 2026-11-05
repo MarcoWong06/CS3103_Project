@@ -97,6 +97,16 @@ case14_format_fail
   Mid-session, virtual_disk.bin is replaced by a directory so format cannot
   open it: format reports an I/O error and the mounted file system stays
   usable; after the original disk is put back, a restart reads the same file.
+case15_write_fault and case16_flush_fault (Linux only; skipped elsewhere)
+  The runner builds fault_fwrite.c into an LD_PRELOAD library. With
+  MINIFS_FAIL_AT=<byte offset> set, the first write to the disk at that offset
+  fails once with EIO, so the rollback's own metadata flush still succeeds.
+  case15: data-write failures. A write fails on its second new block (67) and
+  an append fails on its new tail block (66). case16: metadata-flush
+  failures. The entry-table write (byte 8448) fails after the new FAT has been
+  written, for write, delete and mkdir. Each command reports a disk I/O error,
+  and stat, ls and df show the earlier sizes, block counts and free space,
+  both in the session and after a restart. Then the same commands succeed.
 
 A non-zero minifs exit status adds a "minifs exited with status N" line to
 the output, so the case fails.
