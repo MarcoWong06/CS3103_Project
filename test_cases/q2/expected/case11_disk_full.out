@@ -1,0 +1,45 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        4095 (metadata 65 + data 4030)
+Free blocks:        1
+Metadata reserved:  65
+NAME                             TYPE     SIZE
+big.txt                          file  1031424
+keep.txt                         file        7
+new.txt                          file        0
+Error: write new.txt: Not enough free space (need 3 more block(s), 1 free)
+Name:   new.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+Error: write keep.txt: Not enough free space (need 2 more block(s), 1 free)
+keep me
+Error: append big.txt: Not enough free space (need 2 more block(s), 1 free)
+Name:   big.txt
+Type:   file
+Size:   1031424 bytes
+Blocks: 4029
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        4096 (metadata 65 + data 4031)
+Free blocks:        0
+Metadata reserved:  65
+Error: write new.txt: Not enough free space (need 1 more block(s), 0 free)
+Error: write new.txt: Not enough free space (need 4032 more block(s), 4030 free)
+Name:   new.txt
+Type:   file
+Size:   600 bytes
+Blocks: 3
+--- restart ---
+keep me
+Name:   new.txt
+Type:   file
+Size:   600 bytes
+Blocks: 3
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        69 (metadata 65 + data 4)
+Free blocks:        4027
+Metadata reserved:  65

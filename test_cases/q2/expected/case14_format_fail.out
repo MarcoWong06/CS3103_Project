@@ -1,0 +1,9 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+/
+Error: format: disk I/O error
+kept
+NAME                             TYPE     SIZE
+a.txt                            file        4
+--- restart ---
+kept

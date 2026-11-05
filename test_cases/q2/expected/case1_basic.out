@@ -1,0 +1,26 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+Operating Systems
+Operating Systems project
+Name:   hello.txt
+Type:   file
+Size:   25 bytes
+Blocks: 1
+OS
+Name:   hello.txt
+Type:   file
+Size:   2 bytes
+Blocks: 1
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65
+Reused
+NAME                             TYPE     SIZE
+reused.txt                       file        6
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65
