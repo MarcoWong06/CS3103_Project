@@ -1,0 +1,40 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+/
+Error: mkdir .: Invalid name
+Error: mkdir ..: Invalid name
+Error: mkdir /: Invalid path
+Error: create bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb: Name too long (max 31 characters)
+Name:   empty.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+Name:     dir1
+Type:     directory
+Children: 1
+Name:     /
+Type:     directory
+Children: 2
+Error: cd dir1/sub/empty.txt: Not a directory
+Error: cd nowhere: No such file or directory
+/dir1/sub
+Error: rmdir .: Cannot remove the current directory
+Error: rmdir /dir1/sub: Cannot remove the current directory
+/
+Error: rmdir dir1: Directory not empty
+Error: rmdir /: Cannot remove root directory
+Error: rmdir aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: Not a directory
+Error: mkdir dir1/sub: File exists
+Error: cd cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc: No such file or directory
+Error: mkdir dir1/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc: Name too long (max 31 characters)
+NAME                             TYPE    SIZE
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  file       0
+dir1                             dir        -
+NAME                             TYPE    SIZE
+sub                              dir        -
+sub2                             file       0
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        65 (metadata 65 + data 0)
+Free blocks:        4031
+Metadata reserved:  65

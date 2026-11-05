@@ -8,7 +8,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 Q2="$ROOT/test_cases/q2"
 BIN="$ROOT/minifs"
 DISK_BYTES=1048576
-ALL_CASES="case0_format"
+ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
@@ -45,6 +45,13 @@ case0_format() {
     out+=$'\n--- restart ---\n'
     out+=$(session "$d" $'df\nformat\ndf\nexit\n')
     check case0_format "$out" "$d"
+}
+case8_deep_paths() {
+    local d n cmds=$'format\n' abs="" i
+    d=$(fresh_dir case8_deep_paths); n=$(rep d 31)
+    for i in $(seq 127); do cmds+="mkdir $n"$'\n'"cd $n"$'\n'; abs+="/$n"; done
+    cmds+=$'pwd\n'"mkdir $n"$'\ncd /\n'"stat $abs"$'\nexit\n'
+    check case8_deep_paths "$(session "$d" "$cmds")" "$d"
 }
 
 # ---- main ----

@@ -22,8 +22,9 @@
 #define NUM_BLOCKS      (DISK_SIZE / BLOCK_SIZE)
 #define MAX_ENTRIES     128
 #define MAX_NAME_LEN    31
-/* Initial storage choice, not an assignment limit; extend as needed. */
-#define MAX_PATH_LEN    256
+/* Longest possible absolute path: a chain of MAX_ENTRIES directories, each
+ * a '/' plus a full-length name, plus the terminating NUL. */
+#define MAX_PATH_LEN    (MAX_ENTRIES * (MAX_NAME_LEN + 1) + 1)
 
 #define TYPE_UNUSED     0
 #define TYPE_FILE       1
@@ -51,6 +52,16 @@
 #define ROOT_ID         0
 
 /* Message catalogue: error reasons and fixed startup / format lines. */
+#define MSG_NOENT       "No such file or directory"
+#define MSG_NOTDIR      "Not a directory"
+#define MSG_EXISTS      "File exists"
+#define MSG_BADNAME     "Invalid name"
+#define MSG_LONGNAME    "Name too long (max 31 characters)"
+#define MSG_BADPATH     "Invalid path"
+#define MSG_NOTEMPTY    "Directory not empty"
+#define MSG_RMROOT      "Cannot remove root directory"
+#define MSG_RMCWD       "Cannot remove the current directory"
+#define MSG_TABLEFULL   "Entry table full (max 128 entries)"
 #define MSG_IO          "disk I/O error"
 #define MSG_UNMOUNTED   "no valid file system; run 'format'"
 #define MSG_NO_FS       "No file system found; run 'format'."
@@ -93,7 +104,7 @@ typedef struct {
     uint16_t fat[NUM_BLOCKS];         /* In-memory copy of the FAT. */
     file_entry_t entries[MAX_ENTRIES];/* In-memory copy of the entry table. */
     uint32_t free_blocks;             /* Number of free data blocks. */
-    char cwd[MAX_PATH_LEN];           /* Replaced by a directory ID later. */
+    int cwd_id;                       /* Entry ID of the current directory. */
 } filesystem_t;
 
 _Static_assert(FAT_BLOCKS * BLOCK_SIZE == NUM_BLOCKS * sizeof(uint16_t),
@@ -270,7 +281,7 @@ static uint32_t count_free_blocks(const filesystem_t *fs)
 /*
  * Purpose: load and validate the metadata of the open disk file.
  * Inputs:  state with fs->disk open.
- * Returns: 0 and mounts (mounted, free_blocks, cwd "/") if the file is exactly
+ * Returns: 0 and mounts (mounted, free_blocks, cwd_id = ROOT_ID) if the file is exactly
  *          DISK_SIZE bytes and every superblock field matches its constant;
  *          otherwise -1 and the file system stays unmounted.
  */
@@ -300,7 +311,7 @@ static int load_metadata(filesystem_t *fs)
         return -1;
     }
     fs->free_blocks = count_free_blocks(fs);
-    strcpy(fs->cwd, "/");
+    fs->cwd_id = ROOT_ID;
     fs->mounted = 1;
     return 0;
 }
@@ -342,6 +353,343 @@ static void close_virtual_disk(filesystem_t *fs)
         fclose(fs->disk);
         fs->disk = NULL;
     }
+}
+
+/* ---------- FAT and chain helpers ---------- */
+
+/*
+ * Purpose: count the blocks in a FAT chain.
+ * Inputs:  state, first block of the chain (FAT_END for an empty chain).
+ * Returns: chain length; the walk stops at FAT_END, at an out-of-range link,
+ *          or after NUM_BLOCKS steps, so a damaged FAT cannot loop forever.
+ */
+static uint32_t chain_length(const filesystem_t *fs, uint16_t first)
+{
+    uint32_t count = 0;
+    uint32_t block = first;
+
+    while (block != FAT_END && block < NUM_BLOCKS && count < NUM_BLOCKS) {
+        ++count;
+        block = fs->fat[block];
+    }
+    return count;
+}
+
+/* ---------- Entry-table helpers ---------- */
+
+/*
+ * Purpose: validate one path component used as a new entry's name.
+ * Inputs:  name bytes (not necessarily NUL-terminated) and their length.
+ * Returns: NULL if valid; MSG_LONGNAME if longer than MAX_NAME_LEN; MSG_BADNAME
+ *          if empty, "." or "..", or containing a byte outside 0x21-0x7E or '/'.
+ */
+static const char *name_error(const char *name, size_t len)
+{
+    if (len > MAX_NAME_LEN) {
+        return MSG_LONGNAME;
+    }
+    if (len == 0 || (len == 1 && name[0] == '.') ||
+        (len == 2 && name[0] == '.' && name[1] == '.')) {
+        return MSG_BADNAME;
+    }
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 0x21 || c > 0x7E || c == '/') {
+            return MSG_BADNAME;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Purpose: test whether an entry is a used child of a directory (the root is
+ *          its own parent but is never its own child).
+ * Inputs:  state, entry id, directory id.
+ * Returns: 1 if entry `id` is in use and has parent `dir_id`, else 0.
+ */
+static int is_child_of(const filesystem_t *fs, int id, int dir_id)
+{
+    return id != ROOT_ID && fs->entries[id].type != TYPE_UNUSED &&
+           fs->entries[id].parent_id == dir_id;
+}
+
+/*
+ * Purpose: look up a directory's child by name.
+ * Inputs:  state, directory id, name bytes and their length.
+ * Returns: the child's entry id, or -1 if there is none.
+ */
+static int find_child(const filesystem_t *fs, int dir_id, const char *name, size_t len)
+{
+    for (int id = 0; id < MAX_ENTRIES; ++id) {
+        if (is_child_of(fs, id, dir_id) && strlen(fs->entries[id].name) == len &&
+            memcmp(fs->entries[id].name, name, len) == 0) {
+            return id;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Purpose: find an unused slot in the entry table (the root slot is never free).
+ * Inputs:  state.
+ * Returns: the lowest free entry id, or -1 if the table is full.
+ */
+static int find_free_entry(const filesystem_t *fs)
+{
+    for (int id = 1; id < MAX_ENTRIES; ++id) {
+        if (fs->entries[id].type == TYPE_UNUSED) {
+            return id;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Purpose: count the direct children of a directory.
+ * Inputs:  state, directory id.
+ * Returns: the number of used entries whose parent is `dir_id`.
+ */
+static int count_children(const filesystem_t *fs, int dir_id)
+{
+    int count = 0;
+    for (int id = 0; id < MAX_ENTRIES; ++id) {
+        if (is_child_of(fs, id, dir_id)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+/* Copy of all mutable metadata, used to roll a failed command back. */
+typedef struct {
+    uint16_t fat[NUM_BLOCKS];
+    file_entry_t entries[MAX_ENTRIES];
+    uint32_t free_blocks;
+} fs_snapshot_t;
+
+/*
+ * Purpose: save the mutable metadata before a command changes it.
+ * Inputs:  state, destination snapshot.
+ * Side effects: fills *snap.
+ */
+static void snapshot_take(const filesystem_t *fs, fs_snapshot_t *snap)
+{
+    memcpy(snap->fat, fs->fat, sizeof(snap->fat));
+    memcpy(snap->entries, fs->entries, sizeof(snap->entries));
+    snap->free_blocks = fs->free_blocks;
+}
+
+/*
+ * Purpose: make a metadata change durable, or undo it.
+ * Inputs:  state (already modified), snapshot taken beforehand, status of any
+ *          earlier I/O the command did (0 = fine), command name and path for
+ *          the error line.
+ * Returns: 0 if io_status is 0 and the metadata flush succeeds; otherwise
+ *          restores the snapshot in memory, flushes it again, prints a
+ *          disk I/O error and returns -1.
+ */
+static int commit_changes(filesystem_t *fs, const fs_snapshot_t *snap, int io_status,
+                          const char *cmd, const char *path)
+{
+    if (io_status == 0 && flush_metadata(fs) == 0) {
+        return 0;
+    }
+    memcpy(fs->fat, snap->fat, sizeof(fs->fat));
+    memcpy(fs->entries, snap->entries, sizeof(fs->entries));
+    fs->free_blocks = snap->free_blocks;
+    (void)flush_metadata(fs);
+    fs_error(cmd, path, MSG_IO);
+    return -1;
+}
+
+/* ---------- Path resolution ---------- */
+
+/*
+ * Purpose: resolve the first `len` bytes of a path to an entry, in place.
+ * Inputs:  state, path bytes, number of bytes to use, outputs for the id and
+ *          the failure reason. A leading '/' starts at the root; otherwise at
+ *          the current directory. "." stays, ".." goes to the parent (the
+ *          root's parent is the root), empty components are skipped.
+ * Returns: 0 and *out_id, or -1 with *reason = MSG_NOENT (missing component or
+ *          one longer than MAX_NAME_LEN) or MSG_NOTDIR (a non-final
+ *          component is a regular file).
+ */
+static int resolve_span(const filesystem_t *fs, const char *path, size_t len,
+                        int *out_id, const char **reason)
+{
+    int cur = (len > 0 && path[0] == '/') ? ROOT_ID : fs->cwd_id;
+    size_t i = 0;
+
+    while (i < len) {
+        size_t start;
+        size_t n;
+
+        if (path[i] == '/') {
+            ++i;
+            continue;
+        }
+        start = i;
+        while (i < len && path[i] != '/') {
+            ++i;
+        }
+        n = i - start;
+        if (fs->entries[cur].type != TYPE_DIR) {
+            *reason = MSG_NOTDIR;
+            return -1;
+        }
+        if (n == 1 && path[start] == '.') {
+            continue;
+        }
+        if (n == 2 && path[start] == '.' && path[start + 1] == '.') {
+            cur = fs->entries[cur].parent_id;
+            continue;
+        }
+        cur = (n > MAX_NAME_LEN) ? -1 : find_child(fs, cur, path + start, n);
+        if (cur < 0) {
+            *reason = MSG_NOENT;
+            return -1;
+        }
+    }
+    *out_id = cur;
+    return 0;
+}
+
+/*
+ * Purpose: resolve a whole path string to an entry id.
+ * Inputs:  state, NUL-terminated path, outputs for the id and the reason.
+ * Returns: 0 and *out_id; or -1 with *reason = MSG_NOENT, MSG_NOTDIR, or
+ *          MSG_BADPATH for an empty string.
+ */
+static int resolve_path(const filesystem_t *fs, const char *path, int *out_id,
+                        const char **reason)
+{
+    if (path[0] == '\0') {
+        *reason = MSG_BADPATH;
+        return -1;
+    }
+    return resolve_span(fs, path, strlen(path), out_id, reason);
+}
+
+/*
+ * Purpose: split a path into an existing parent directory and a new leaf name.
+ * Inputs:  state, NUL-terminated path, outputs for the parent id, the leaf
+ *          (a pointer into `path`, not NUL-terminated) and its length, and
+ *          the failure reason. Trailing slashes are ignored.
+ * Returns: 0 on success. Otherwise -1 with *reason, checked in this order:
+ *          MSG_BADPATH (no leaf, only slashes), the parent prefix's own
+ *          resolution failure, MSG_NOTDIR (parent is a regular file), then
+ *          the leaf's name_error().
+ */
+static int resolve_parent(const filesystem_t *fs, const char *path, int *parent_id,
+                          const char **leaf, size_t *leaf_len, const char **reason)
+{
+    size_t end = strlen(path);
+    size_t start;
+    const char *bad;
+
+    while (end > 0 && path[end - 1] == '/') {
+        --end;
+    }
+    if (end == 0) {
+        *reason = MSG_BADPATH;
+        return -1;
+    }
+    start = end;
+    while (start > 0 && path[start - 1] != '/') {
+        --start;
+    }
+    if (resolve_span(fs, path, start, parent_id, reason) != 0) {
+        return -1;
+    }
+    if (fs->entries[*parent_id].type != TYPE_DIR) {
+        *reason = MSG_NOTDIR;
+        return -1;
+    }
+    bad = name_error(path + start, end - start);
+    if (bad != NULL) {
+        *reason = bad;
+        return -1;
+    }
+    *leaf = path + start;
+    *leaf_len = end - start;
+    return 0;
+}
+
+/*
+ * Purpose: write the absolute path of an entry into a buffer.
+ * Inputs:  state, entry id, destination buffer and its capacity.
+ * Side effects: fills buf with "/" for the root or "/a/b/c" otherwise,
+ *          truncating (never overflowing) if cap is too small; with
+ *          MAX_PATH_LEN capacity nothing is ever truncated.
+ */
+static void build_path(const filesystem_t *fs, int id, char *buf, size_t cap)
+{
+    int chain[MAX_ENTRIES];
+    int depth = 0;
+    size_t pos = 0;
+
+    if (cap == 0) {
+        return;
+    }
+    while (id != ROOT_ID && id >= 0 && id < MAX_ENTRIES && depth < MAX_ENTRIES) {
+        chain[depth++] = id;
+        id = fs->entries[id].parent_id;
+    }
+    if (depth == 0 && pos + 1 < cap) {
+        buf[pos++] = '/';
+    }
+    while (depth > 0) {
+        const char *name = fs->entries[chain[--depth]].name;
+        size_t n = strlen(name);
+
+        if (pos + 1 + n + 1 > cap) {
+            break;
+        }
+        buf[pos++] = '/';
+        memcpy(buf + pos, name, n);
+        pos += n;
+    }
+    buf[pos] = '\0';
+}
+
+/*
+ * Purpose: create a new empty file or directory entry at a path.
+ * Inputs:  state, command name for errors, path as typed, TYPE_FILE or TYPE_DIR.
+ * Returns: 0 on success (metadata flushed); -1 after printing an error.
+ *          Checks in order: path/parent/name (resolve_parent), duplicate
+ *          (MSG_EXISTS), free slot (MSG_TABLEFULL). Rolls back on I/O failure.
+ */
+static int create_entry(filesystem_t *fs, const char *cmd, const char *path, uint8_t type)
+{
+    int parent;
+    int id;
+    const char *leaf;
+    size_t leaf_len;
+    const char *reason;
+    fs_snapshot_t snap;
+    file_entry_t *e;
+
+    if (resolve_parent(fs, path, &parent, &leaf, &leaf_len, &reason) != 0) {
+        fs_error(cmd, path, reason);
+        return -1;
+    }
+    if (find_child(fs, parent, leaf, leaf_len) >= 0) {
+        fs_error(cmd, path, MSG_EXISTS);
+        return -1;
+    }
+    id = find_free_entry(fs);
+    if (id < 0) {
+        fs_error(cmd, path, MSG_TABLEFULL);
+        return -1;
+    }
+    snapshot_take(fs, &snap);
+    e = &fs->entries[id];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->name, leaf, leaf_len);
+    e->parent_id = parent;
+    e->first_block = FAT_END;
+    e->type = type;
+    return commit_changes(fs, &snap, 0, cmd, path);
 }
 
 /* ---------- Operations students must implement ---------- */
@@ -403,22 +751,21 @@ static int fs_format(filesystem_t *fs)
     }
 
     fs->free_blocks = count_free_blocks(fs);
-    strcpy(fs->cwd, "/");
+    fs->cwd_id = ROOT_ID;
     fs->mounted = 1;
     printf("%s\n", MSG_FORMAT_OK);
     return 0;
 }
 
+/*
+ * Purpose: create an empty regular file.
+ * Inputs:  mounted state, path as typed.
+ * Returns: 0 on success; -1 after printing an error.
+ */
 static int fs_create(filesystem_t *fs, const char *path)
 {
     if (!require_mounted(fs, "create")) return -1;
-    (void)fs;
-    (void)path;
-    /* TODO: resolve the parent directory and create an empty regular file.
-       Check entry limits and names; reject duplicates in the same directory
-       without changing the disk. A new empty file needs no data blocks. */
-    fprintf(stderr, "TODO: create is not implemented.\n");
-    return -1;
+    return create_entry(fs, "create", path, TYPE_FILE);
 }
 
 static int fs_write(filesystem_t *fs, const char *path, const char *content)
@@ -465,63 +812,161 @@ static int fs_delete(filesystem_t *fs, const char *path)
     return -1;
 }
 
+/*
+ * Purpose: create an empty directory.
+ * Inputs:  mounted state, path as typed.
+ * Returns: 0 on success; -1 after printing an error.
+ */
 static int fs_mkdir(filesystem_t *fs, const char *path)
 {
     if (!require_mounted(fs, "mkdir")) return -1;
-    (void)fs;
-    (void)path;
-    /* TODO: create a directory. */
-    fprintf(stderr, "TODO: mkdir is not implemented.\n");
-    return -1;
+    return create_entry(fs, "mkdir", path, TYPE_DIR);
 }
 
+/*
+ * Purpose: remove an empty directory.
+ * Inputs:  mounted state, path as typed.
+ * Returns: 0 on success; -1 after printing an error. Checks in order: path
+ *          resolves, is a directory, is not the root, is not the current
+ *          directory, is empty. Rolls back on I/O failure.
+ */
 static int fs_rmdir(filesystem_t *fs, const char *path)
 {
+    int id;
+    const char *reason;
+    fs_snapshot_t snap;
+
     if (!require_mounted(fs, "rmdir")) return -1;
-    (void)fs;
-    (void)path;
-    /* TODO: resolve and remove an empty directory, but never the root. */
-    fprintf(stderr, "TODO: rmdir is not implemented.\n");
-    return -1;
+    if (resolve_path(fs, path, &id, &reason) != 0) {
+        fs_error("rmdir", path, reason);
+        return -1;
+    }
+    if (fs->entries[id].type != TYPE_DIR) {
+        fs_error("rmdir", path, MSG_NOTDIR);
+        return -1;
+    }
+    if (id == ROOT_ID) {
+        fs_error("rmdir", path, MSG_RMROOT);
+        return -1;
+    }
+    if (id == fs->cwd_id) {
+        fs_error("rmdir", path, MSG_RMCWD);
+        return -1;
+    }
+    if (count_children(fs, id) != 0) {
+        fs_error("rmdir", path, MSG_NOTEMPTY);
+        return -1;
+    }
+    snapshot_take(fs, &snap);
+    memset(&fs->entries[id], 0, sizeof(fs->entries[id]));
+    return commit_changes(fs, &snap, 0, "rmdir", path);
 }
 
+/*
+ * Purpose: change the current directory.
+ * Inputs:  mounted state, path as typed.
+ * Returns: 0 on success (cwd_id updated); -1 after printing an error
+ *          (MSG_NOENT, or MSG_NOTDIR if the path is a regular file).
+ */
 static int fs_cd(filesystem_t *fs, const char *path)
 {
+    int id;
+    const char *reason;
+
     if (!require_mounted(fs, "cd")) return -1;
-    (void)fs;
-    (void)path;
-    /* TODO: resolve path and update the current working directory. */
-    fprintf(stderr, "TODO: cd is not implemented.\n");
-    return -1;
+    if (resolve_path(fs, path, &id, &reason) != 0) {
+        fs_error("cd", path, reason);
+        return -1;
+    }
+    if (fs->entries[id].type != TYPE_DIR) {
+        fs_error("cd", path, MSG_NOTDIR);
+        return -1;
+    }
+    fs->cwd_id = id;
+    return 0;
 }
 
 /* Print the current path; keep this representation consistent in fs_cd().
  * Prints the unmounted error instead when no valid file system is mounted. */
+/*
+ * Purpose: print the absolute path of the current directory ("/" for root).
+ * Inputs:  state; prints the unmounted error instead when not mounted.
+ */
 static void fs_pwd(const filesystem_t *fs)
 {
+    char path[MAX_PATH_LEN];
+
     if (!require_mounted(fs, "pwd")) return;
-    printf("%s\n", fs->cwd);
+    build_path(fs, fs->cwd_id, path, sizeof(path));
+    printf("%s\n", path);
 }
 
+/* qsort comparator: order entry pointers by name with strcmp. */
+static int compare_entry_names(const void *a, const void *b)
+{
+    const file_entry_t *ea = *(const file_entry_t *const *)a;
+    const file_entry_t *eb = *(const file_entry_t *const *)b;
+    return strcmp(ea->name, eb->name);
+}
+
+/*
+ * Purpose: list the current directory: header, then children sorted by name,
+ *          files with their size and directories with "-".
+ * Inputs:  mounted state.
+ * Returns: 0 on success; -1 (with the unmounted error) otherwise.
+ */
 static int fs_ls(filesystem_t *fs)
 {
+    const file_entry_t *children[MAX_ENTRIES];
+    size_t count = 0;
+
     if (!require_mounted(fs, "ls")) return -1;
-    (void)fs;
-    /* TODO: list the current directory's entries: name and type, plus
-       size for regular files. */
-    fprintf(stderr, "TODO: ls is not implemented.\n");
-    return -1;
+    for (int id = 0; id < MAX_ENTRIES; ++id) {
+        if (is_child_of(fs, id, fs->cwd_id)) {
+            children[count++] = &fs->entries[id];
+        }
+    }
+    qsort(children, count, sizeof(children[0]), compare_entry_names);
+    printf("%-32s %-5s %6s\n", "NAME", "TYPE", "SIZE");
+    for (size_t i = 0; i < count; ++i) {
+        if (children[i]->type == TYPE_DIR) {
+            printf("%-32s %-5s %6s\n", children[i]->name, "dir", "-");
+        } else {
+            printf("%-32s %-5s %6u\n", children[i]->name, "file", children[i]->size);
+        }
+    }
+    return 0;
 }
 
+/*
+ * Purpose: show information about a file or directory.
+ * Inputs:  mounted state, path as typed.
+ * Returns: 0 on success; -1 after printing an error. A file shows its size
+ *          and data-block count; a directory its direct-child count.
+ */
 static int fs_stat(filesystem_t *fs, const char *path)
 {
+    int id;
+    const char *reason;
+    const file_entry_t *e;
+
     if (!require_mounted(fs, "stat")) return -1;
-    (void)fs;
-    (void)path;
-    /* TODO: show name/type, and size plus data-block count for a file;
-       show direct-child count excluding '.' and '..' for a directory. */
-    fprintf(stderr, "TODO: stat is not implemented.\n");
-    return -1;
+    if (resolve_path(fs, path, &id, &reason) != 0) {
+        fs_error("stat", path, reason);
+        return -1;
+    }
+    e = &fs->entries[id];
+    if (e->type == TYPE_DIR) {
+        printf("Name:     %s\n", e->name);
+        printf("Type:     directory\n");
+        printf("Children: %d\n", count_children(fs, id));
+    } else {
+        printf("Name:   %s\n", e->name);
+        printf("Type:   file\n");
+        printf("Size:   %u bytes\n", e->size);
+        printf("Blocks: %u\n", chain_length(fs, e->first_block));
+    }
+    return 0;
 }
 
 /*
@@ -648,7 +1093,7 @@ int main(void)
     int running = 1;
 
     memset(&fs, 0, sizeof(fs));
-    strcpy(fs.cwd, "/");
+    fs.cwd_id = ROOT_ID;
 
     if (open_virtual_disk(&fs) != 0) {
         fprintf(stderr, "Failed to initialize the virtual disk.\n");
