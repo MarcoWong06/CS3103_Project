@@ -836,7 +836,10 @@ static void snapshot_take(const filesystem_t *fs, fs_snapshot_t *snap)
  *          the error line.
  * Returns: 0 if io_status is 0 and the metadata flush succeeds; otherwise
  *          restores the snapshot in memory, flushes it again, prints a
- *          disk I/O error and returns -1.
+ *          disk I/O error and returns -1. Only metadata is restored: file
+ *          data already overwritten stays changed. If the second flush also
+ *          fails, the on-disk metadata may stay half-updated until the next
+ *          successful flush.
  */
 static int commit_changes(filesystem_t *fs, const fs_snapshot_t *snap, int io_status,
                           const char *cmd, const char *path)

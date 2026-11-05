@@ -11,8 +11,11 @@ boundary tests the specification requires and the README disk-layout section.
 - Store the entire simulated file system inside `virtual_disk.bin`
   (exactly 1,048,576 bytes). No host file per simulated file, no sidecar
   metadata, no file-system library.
-- Persistent across restart; failed or invalid commands never crash and never
-  leave partial changes on disk or in memory.
+- Persistent across restart. Failed or invalid commands never crash. A
+  command rejected by a check (bad path or name, wrong type, duplicate, full
+  entry table, not enough space) changes nothing, on disk or in memory. A
+  host I/O error while a command writes `virtual_disk.bin` rolls back the
+  metadata only, with the limits given in §5 ("Failed commands").
 - C11, single source file `problem2.c` (already built by `Makefile` and
   `CMakeLists.txt`). The starter's command parser and command semantics are
   kept. Tested on Linux (Docker image `cs3103-clion-linux:1.0`, Ubuntu 24.04).
@@ -137,18 +140,27 @@ All chain walks are bounded by `NUM_BLOCKS` steps.
 | `read`   | target must be a regular file; walk the chain, emit `min(256, remaining)` bytes per block, then one newline. An empty file prints an empty line |
 | `delete` | target must be a regular file (a directory → error suggesting `rmdir`); free the whole chain; clear the entry |
 
-**No partial updates.**
+**Failed commands.**
 
 1. Every check (path, type, name, duplicate, entry slot, free space) runs
-   before any state changes.
+   before any state changes. Insufficient space, a full entry table, invalid
+   names and invalid paths are all rejected here, so they never modify
+   anything, in memory or on disk.
 2. Mutating commands snapshot the in-memory FAT, entry table and free count
    (≈16 KB `memcpy`) before mutating.
-3. If a host I/O call fails during the operation, the snapshot is restored,
-   the metadata region is rewritten from the restored state, and an error is
-   printed.
-
-Insufficient space, a full entry table, invalid names and invalid paths are
-all rejected in step 1, so they never modify anything.
+3. If a host I/O call fails during the operation, the snapshot is restored in
+   memory, the metadata region is rewritten from the restored state, and a
+   disk I/O error is printed. This rollback covers metadata only:
+   - File data overwritten in place is not restored. A `write` that replaces
+     some of a file's existing blocks and then fails leaves the file at its
+     old size but holding a mix of new and old bytes. `append` rewrites the
+     existing bytes of the tail block unchanged, so a failed `append` still
+     reads as before. Blocks newly taken by the failed command are free again.
+   - If rewriting the restored metadata also fails, the disk can be left with
+     a half-updated FAT or entry table (for example blocks marked used that no
+     entry owns). The in-memory state is still the restored one, and the next
+     mutating command that succeeds rewrites the whole metadata region. If the program
+     exits first, the next start-up may reject the image as invalid.
 
 ## 6. Directories and path resolution
 
