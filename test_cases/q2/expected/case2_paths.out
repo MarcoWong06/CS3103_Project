@@ -1,0 +1,18 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+/courses/os/labs
+Path example
+Path example
+/courses/os
+Path example
+Path example
+NAME                             TYPE    SIZE
+report.txt                       file      12
+Name:     labs
+Type:     directory
+Children: 1
+Name:   report.txt
+Type:   file
+Size:   12 bytes
+Blocks: 1
+NAME                             TYPE    SIZE

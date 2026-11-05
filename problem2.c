@@ -54,6 +54,8 @@
 /* Message catalogue: error reasons and fixed startup / format lines. */
 #define MSG_NOENT       "No such file or directory"
 #define MSG_NOTDIR      "Not a directory"
+#define MSG_ISDIR       "Is a directory"
+#define MSG_ISDIR_RMDIR "Is a directory (use rmdir)"
 #define MSG_EXISTS      "File exists"
 #define MSG_BADNAME     "Invalid name"
 #define MSG_LONGNAME    "Name too long (max 31 characters)"
@@ -62,6 +64,7 @@
 #define MSG_RMROOT      "Cannot remove root directory"
 #define MSG_RMCWD       "Cannot remove the current directory"
 #define MSG_TABLEFULL   "Entry table full (max 128 entries)"
+#define MSG_NOSPACE_FMT "Not enough free space (need %" PRIu64 " more block(s), %u free)"
 #define MSG_IO          "disk I/O error"
 #define MSG_UNMOUNTED   "no valid file system; run 'format'"
 #define MSG_NO_FS       "No file system found; run 'format'."
@@ -373,6 +376,186 @@ static uint32_t chain_length(const filesystem_t *fs, uint16_t first)
         block = fs->fat[block];
     }
     return count;
+}
+
+/* Largest possible file: every data block in the data region. */
+#define MAX_FILE_BYTES  ((uint64_t)(NUM_BLOCKS - DATA_START) * BLOCK_SIZE)
+
+/*
+ * Purpose: number of blocks needed to hold a byte count.
+ * Inputs:  byte count.
+ * Returns: ceil(bytes / BLOCK_SIZE); 0 for 0 bytes.
+ */
+static uint64_t blocks_for_bytes(uint64_t bytes)
+{
+    return (bytes + BLOCK_SIZE - 1) / BLOCK_SIZE;
+}
+
+/*
+ * Purpose: take the lowest free data block.
+ * Inputs:  state, destination for the block number.
+ * Returns: 0 and *out (block marked FAT_END, free_blocks decremented); -1 if
+ *          no data block is free (nothing changed).
+ */
+static int alloc_block(filesystem_t *fs, uint16_t *out)
+{
+    for (uint32_t b = DATA_START; b < NUM_BLOCKS; ++b) {
+        if (fs->fat[b] == FAT_FREE) {
+            fs->fat[b] = FAT_END;
+            if (fs->free_blocks > 0) {
+                --fs->free_blocks;
+            }
+            *out = (uint16_t)b;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Purpose: release every block of a chain.
+ * Inputs:  state, first block (FAT_END for an empty chain).
+ * Side effects: each block becomes FAT_FREE and free_blocks grows by one per
+ *          block. The walk stops at FAT_END, at a link outside the data
+ *          region, or after NUM_BLOCKS steps, so a damaged FAT cannot loop.
+ */
+static void free_chain(filesystem_t *fs, uint16_t first)
+{
+    uint32_t block = first;
+
+    for (uint32_t steps = 0; steps < NUM_BLOCKS && block >= DATA_START && block < NUM_BLOCKS;
+         ++steps) {
+        uint32_t next = fs->fat[block];
+
+        fs->fat[block] = FAT_FREE;
+        ++fs->free_blocks;
+        block = next;
+    }
+}
+
+/*
+ * Purpose: grow or shrink a file's chain to an exact block count.
+ * Inputs:  state, the file entry, wanted block count, output for the shortfall.
+ * Returns: 0 on success. -1 if growing needs more blocks than are free: then
+ *          *missing is the number of extra blocks required and nothing at all
+ *          has been changed. Growth links new blocks at the tail (and sets
+ *          first_block if the chain was empty); shrinking ends the chain after
+ *          block new_blocks, frees the rest, and sets first_block = FAT_END
+ *          when new_blocks is 0. Data in the blocks is not touched.
+ */
+static int resize_chain(filesystem_t *fs, file_entry_t *entry, uint64_t new_blocks,
+                        uint64_t *missing)
+{
+    uint64_t have = chain_length(fs, entry->first_block);
+
+    if (new_blocks > have) {
+        uint32_t tail = FAT_END;
+        uint32_t block = entry->first_block;
+
+        if (new_blocks - have > fs->free_blocks) {
+            *missing = new_blocks - have;
+            return -1;
+        }
+        for (uint64_t i = 0; i < have; ++i) {
+            tail = block;
+            block = fs->fat[block];
+        }
+        for (uint64_t i = have; i < new_blocks; ++i) {
+            uint16_t fresh;
+
+            if (alloc_block(fs, &fresh) != 0) {
+                *missing = new_blocks - i;
+                return -1;
+            }
+            if (tail == FAT_END) {
+                entry->first_block = fresh;
+            } else {
+                fs->fat[tail] = fresh;
+            }
+            tail = fresh;
+        }
+    } else if (new_blocks < have) {
+        if (new_blocks == 0) {
+            free_chain(fs, entry->first_block);
+            entry->first_block = FAT_END;
+        } else {
+            uint32_t last = entry->first_block;
+            uint16_t rest;
+
+            for (uint64_t i = 1; i < new_blocks; ++i) {
+                last = fs->fat[last];
+            }
+            rest = fs->fat[last];
+            fs->fat[last] = FAT_END;
+            free_chain(fs, rest);
+        }
+    }
+    return 0;
+}
+
+/*
+ * Purpose: print the "not enough free space" error.
+ * Inputs:  command name, path as typed, extra blocks needed, blocks free.
+ * Side effects: one error line on stderr.
+ */
+static void report_no_space(const char *cmd, const char *path, uint64_t missing,
+                            uint32_t free_blocks)
+{
+    char reason[96];
+
+    snprintf(reason, sizeof(reason), MSG_NOSPACE_FMT, missing, free_blocks);
+    fs_error(cmd, path, reason);
+}
+
+/*
+ * Purpose: store bytes at a file offset, across the file's block chain.
+ * Inputs:  state, the file entry (its chain must already cover offset+len and
+ *          its size field must already hold the final file size), byte offset,
+ *          data, length.
+ * Returns: 0 on success; -1 on an I/O error or a chain that is too short.
+ *          A block written only partly is read first and merged when the write
+ *          starts mid-block or the file has bytes after it in that block;
+ *          otherwise the unused tail of the block is zero-filled.
+ */
+static int write_range(filesystem_t *fs, const file_entry_t *entry, uint32_t offset,
+                       const char *data, uint32_t len)
+{
+    uint32_t block = entry->first_block;
+    uint32_t skip = offset / BLOCK_SIZE;
+    uint32_t pos = offset;
+    uint32_t done = 0;
+
+    for (uint32_t i = 0; i < skip && block != FAT_END && block < NUM_BLOCKS; ++i) {
+        block = fs->fat[block];
+    }
+    while (done < len) {
+        uint8_t buf[BLOCK_SIZE];
+        uint32_t start = pos % BLOCK_SIZE;
+        uint32_t n = BLOCK_SIZE - start;
+        uint32_t block_base = pos - start;
+
+        if (block < DATA_START || block >= NUM_BLOCKS) {
+            return -1;
+        }
+        if (n > len - done) {
+            n = len - done;
+        }
+        if (n < BLOCK_SIZE && (start > 0 || entry->size > block_base + n)) {
+            if (read_block(fs, block, buf) != 0) {
+                return -1;
+            }
+        } else {
+            memset(buf, 0, sizeof(buf));
+        }
+        memcpy(buf + start, data + done, n);
+        if (write_block(fs, block, buf) != 0) {
+            return -1;
+        }
+        done += n;
+        pos += n;
+        block = fs->fat[block];
+    }
+    return 0;
 }
 
 /* ---------- Entry-table helpers ---------- */
@@ -692,6 +875,29 @@ static int create_entry(filesystem_t *fs, const char *cmd, const char *path, uin
     return commit_changes(fs, &snap, 0, cmd, path);
 }
 
+/*
+ * Purpose: turn a path into the entry ID of a regular file.
+ * Inputs:  state, command name, path as typed, reason to report when the path
+ *          is a directory, output for the ID.
+ * Returns: 0 and *out_id; -1 after printing the error (resolution failure, or
+ *          dir_reason for a directory).
+ */
+static int resolve_regular_file(filesystem_t *fs, const char *cmd, const char *path,
+                                const char *dir_reason, int *out_id)
+{
+    const char *reason;
+
+    if (resolve_path(fs, path, out_id, &reason) != 0) {
+        fs_error(cmd, path, reason);
+        return -1;
+    }
+    if (fs->entries[*out_id].type != TYPE_FILE) {
+        fs_error(cmd, path, dir_reason);
+        return -1;
+    }
+    return 0;
+}
+
 /* ---------- Operations students must implement ---------- */
 
 /*
@@ -768,17 +974,33 @@ static int fs_create(filesystem_t *fs, const char *path)
     return create_entry(fs, "create", path, TYPE_FILE);
 }
 
+/*
+ * Purpose: replace a file's contents.
+ * Inputs:  mounted state, path as typed, content (NUL-terminated, without the
+ *          outer quotes).
+ * Returns: 0 on success; -1 after printing an error (not found, directory,
+ *          not enough free space, I/O error). On any failure the disk and
+ *          metadata are as before the command.
+ */
 static int fs_write(filesystem_t *fs, const char *path, const char *content)
 {
+    int id;
+    uint64_t missing = 0;
+    size_t len = strlen(content);
+    fs_snapshot_t snap;
+    file_entry_t *e;
+
     if (!require_mounted(fs, "write")) return -1;
-    (void)fs;
-    (void)path;
-    (void)content;
-    /* TODO: replace contents, allocating or releasing blocks as needed.
-       content excludes the outer command quotes. On insufficient space,
-       fail without partial changes to data, metadata, or the free map. */
-    fprintf(stderr, "TODO: write is not implemented.\n");
-    return -1;
+    if (resolve_regular_file(fs, "write", path, MSG_ISDIR, &id) != 0) return -1;
+    e = &fs->entries[id];
+    snapshot_take(fs, &snap);
+    if (resize_chain(fs, e, blocks_for_bytes(len), &missing) != 0) {
+        report_no_space("write", path, missing, fs->free_blocks);
+        return -1;
+    }
+    e->size = (uint32_t)len;
+    return commit_changes(fs, &snap, write_range(fs, e, 0, content, (uint32_t)len),
+                          "write", path);
 }
 
 static int fs_append(filesystem_t *fs, const char *path, const char *content)
@@ -792,24 +1014,57 @@ static int fs_append(filesystem_t *fs, const char *path, const char *content)
     return -1;
 }
 
+/*
+ * Purpose: print a file's contents followed by a newline.
+ * Inputs:  mounted state, path as typed.
+ * Returns: 0 on success; -1 after printing an error (not found, directory,
+ *          or a damaged chain / read failure, reported as a disk I/O error).
+ */
 static int fs_read(filesystem_t *fs, const char *path)
 {
+    int id;
+    const file_entry_t *e;
+    uint32_t block;
+    uint32_t remaining;
+
     if (!require_mounted(fs, "read")) return -1;
-    (void)fs;
-    (void)path;
-    /* TODO: reconstruct and display a file from its allocated data blocks. */
-    fprintf(stderr, "TODO: read is not implemented.\n");
-    return -1;
+    if (resolve_regular_file(fs, "read", path, MSG_ISDIR, &id) != 0) return -1;
+    e = &fs->entries[id];
+    block = e->first_block;
+    remaining = e->size;
+    while (remaining > 0) {
+        uint8_t buf[BLOCK_SIZE];
+        uint32_t n = remaining < BLOCK_SIZE ? remaining : BLOCK_SIZE;
+
+        if (block < DATA_START || block >= NUM_BLOCKS || read_block(fs, block, buf) != 0) {
+            fs_error("read", path, MSG_IO);
+            return -1;
+        }
+        fwrite(buf, 1, n, stdout);
+        remaining -= n;
+        block = fs->fat[block];
+    }
+    putchar('\n');
+    return 0;
 }
 
+/*
+ * Purpose: remove a regular file and free its blocks.
+ * Inputs:  mounted state, path as typed.
+ * Returns: 0 on success; -1 after printing an error (not found, or a
+ *          directory: use rmdir). Rolls back on I/O failure.
+ */
 static int fs_delete(filesystem_t *fs, const char *path)
 {
+    int id;
+    fs_snapshot_t snap;
+
     if (!require_mounted(fs, "delete")) return -1;
-    (void)fs;
-    (void)path;
-    /* TODO: remove a file and release all blocks owned by it. */
-    fprintf(stderr, "TODO: delete is not implemented.\n");
-    return -1;
+    if (resolve_regular_file(fs, "delete", path, MSG_ISDIR_RMDIR, &id) != 0) return -1;
+    snapshot_take(fs, &snap);
+    free_chain(fs, fs->entries[id].first_block);
+    memset(&fs->entries[id], 0, sizeof(fs->entries[id]));
+    return commit_changes(fs, &snap, 0, "delete", path);
 }
 
 /*

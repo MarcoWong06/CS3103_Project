@@ -8,7 +8,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 Q2="$ROOT/test_cases/q2"
 BIN="$ROOT/minifs"
 DISK_BYTES=1048576
-ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths"
+ALL_CASES="case0_format case6_entry_limit case7_boundaries case8_deep_paths case2_paths case5_invalid case9_file_boundaries"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
