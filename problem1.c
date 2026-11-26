@@ -15,19 +15,23 @@
 #define NUM_WORKERS 3
 #define NUM_CONSUMERS 2
 #define ITEMS_PER_PRODUCER 4
+#define TOTAL_ITEMS \
+    (NUM_PRODUCERS * ITEMS_PER_PRODUCER)
+
+#define TERMINATION_ID (-1)
 
 typedef struct {
     int id;
     int producer_id;
     int value;
-} item_t;
+} item_t; // producer A
 
 typedef struct {
     int id;
     int producer_id;
     int worker_id;
     long result;
-} result_t;
+} result_t; // after done A
 
 typedef struct {
     item_t data[BUFFER_A_SIZE];
@@ -50,45 +54,114 @@ typedef struct {
 typedef struct {
     input_buffer_t input;
     output_buffer_t output;
-    /* TODO: add shared result records and termination state as needed.
-       You may extend these structures and add synchronization. */
+    /* Shared result records used by the consumers and checked by the parent. */
+    result_t records[NUM_PRODUCERS * ITEMS_PER_PRODUCER];
+    int seen[NUM_PRODUCERS * ITEMS_PER_PRODUCER];
+    int collected_count;
+    int out_of_range_count;
+    sem_t records_mutex;
 } shared_t;
 
 /* Generate this producer's input items and insert them into Buffer A. */
 static void producer(shared_t *sh, int producer_id)
 {
-    (void)sh;
-    /* TODO: for j = 0 .. ITEMS_PER_PRODUCER-1, generate an item with
-       id = producer_id * ITEMS_PER_PRODUCER + j, producer_id as supplied,
-       and value = id + 1. Insert it into sh->input with synchronization.
-       Generate the item outside the buffer's critical section.
-       Use BUFFER_A_SIZE for circular-buffer wraparound.
-       Complete this producer's part of your termination protocol. */
-    fprintf(stderr, "Producer %d: TODO\n", producer_id);
+    /* Generate each item outside the buffer's critical section. */
+    for (int j = 0; j < ITEMS_PER_PRODUCER; ++j) {
+        item_t item;
+        item.id = producer_id * ITEMS_PER_PRODUCER + j;
+        item.producer_id = producer_id;
+        item.value = item.id + 1;
+
+        sem_wait(&sh->input.empty);
+        sem_wait(&sh->input.mutex);
+
+        sh->input.data[sh->input.in] = item;
+        sh->input.in = (sh->input.in + 1) % BUFFER_A_SIZE;
+
+        sem_post(&sh->input.mutex);
+        sem_post(&sh->input.full);
+    }
+
+    /* The parent adds termination items after all producers have finished. */
 }
 
 /* Transfer input items through the computation stage into Buffer B. */
 static void worker(shared_t *sh, int worker_id)
 {
-    (void)sh;
-    /* TODO: remove an item from sh->input and release its lock.
-       Compute (long)item.value * item.value outside the critical section.
-       Preserve id and producer_id, and record this worker_id.
-       Insert the result into sh->output using BUFFER_B_SIZE for wraparound.
-       Follow your termination protocol; an empty buffer is not completion. */
-    fprintf(stderr, "Worker %d: TODO\n", worker_id);
+    for (;;) {
+        item_t item;
+        result_t result;
+
+        /* Remove one item from Buffer A. */
+        sem_wait(&sh->input.full);
+        sem_wait(&sh->input.mutex);
+
+        item = sh->input.data[sh->input.out];
+        sh->input.out = (sh->input.out + 1) % BUFFER_A_SIZE;
+
+        sem_post(&sh->input.mutex);
+        sem_post(&sh->input.empty);
+
+        /* A termination item is not processed or copied into Buffer B. */
+        if (item.id == TERMINATION_ID)
+            break;
+
+        /* Compute outside the Buffer A critical section. */
+        result.id = item.id;
+        result.producer_id = item.producer_id;
+        result.worker_id = worker_id;
+        result.result = (long)item.value * item.value;
+
+        /* Insert the completed result into Buffer B. */
+        sem_wait(&sh->output.empty);
+        sem_wait(&sh->output.mutex);
+
+        sh->output.data[sh->output.in] = result;
+        sh->output.in = (sh->output.in + 1) % BUFFER_B_SIZE;
+
+        sem_post(&sh->output.mutex);
+        sem_post(&sh->output.full);
+    }
 }
 
 /* Collect Buffer B results into synchronized shared records. */
 static void consumer(shared_t *sh, int consumer_id)
 {
-    (void)sh;
-    /* TODO: remove results from sh->output and save them in shared memory.
-       Synchronize shared updates and retain enough information for the
-       parent to detect missing, duplicate, or out-of-range item IDs.
-       Exclude termination records and follow your termination protocol.
-       The parent prints the final results in ascending item ID order. */
-    fprintf(stderr, "Consumer %d: TODO\n", consumer_id);
+    (void)consumer_id;
+
+    for (;;) {
+        result_t result;
+
+        /* Remove one result from Buffer B. */
+        sem_wait(&sh->output.full);
+        sem_wait(&sh->output.mutex);
+
+        result = sh->output.data[sh->output.out];
+        sh->output.out = (sh->output.out + 1) % BUFFER_B_SIZE;
+
+        sem_post(&sh->output.mutex);
+        sem_post(&sh->output.empty);
+
+        /* Do not store a termination record. */
+        if (result.id == TERMINATION_ID)
+            break;
+
+        /* Protect every update to the shared verification records. */
+        sem_wait(&sh->records_mutex);
+
+        if (result.id < 0 || result.id >= TOTAL_ITEMS) {
+            sh->out_of_range_count++;
+        } else {
+            /* Keep the first record; seen[] counts all occurrences. */
+            if (sh->seen[result.id] == 0)
+                sh->records[result.id] = result;
+
+            sh->seen[result.id]++;
+            sh->collected_count++;
+        }
+
+        sem_post(&sh->records_mutex);
+    }
 }
 
 /* Initialize the shared buffer indices and process-shared semaphores. */
@@ -96,19 +169,79 @@ static int init_shared(shared_t *sh)
 {
     sh->input.in = sh->input.out = 0;
     sh->output.in = sh->output.out = 0;
+    sh->collected_count = 0;
+    sh->out_of_range_count = 0;
+
+    for (int i = 0; i < TOTAL_ITEMS; ++i) {
+        sh->seen[i] = 0;
+        sh->records[i].id = -1;
+        sh->records[i].producer_id = -1;
+        sh->records[i].worker_id = -1;
+        sh->records[i].result = 0;
+    }
 
     if (sem_init(&sh->input.mutex, 1, 1) == -1 ||
         sem_init(&sh->input.empty, 1, BUFFER_A_SIZE) == -1 ||
         sem_init(&sh->input.full, 1, 0) == -1 ||
         sem_init(&sh->output.mutex, 1, 1) == -1 ||
         sem_init(&sh->output.empty, 1, BUFFER_B_SIZE) == -1 ||
-        sem_init(&sh->output.full, 1, 0) == -1) {
+        sem_init(&sh->output.full, 1, 0) == -1 ||
+        sem_init(&sh->records_mutex, 1, 1) == -1) {
         perror("sem_init");
         return -1;
     }
-    /* TODO: initialize any added shared records, synchronization, and
-       termination state here, before any child process is created. */
+
     return 0;
+}
+
+/* Insert a termination item into Buffer A using the normal buffer protocol. */
+static void send_worker_termination(shared_t *sh)
+{
+    item_t item;
+    item.id = TERMINATION_ID;
+    item.producer_id = -1;
+    item.value = 0;
+
+    sem_wait(&sh->input.empty);
+    sem_wait(&sh->input.mutex);
+
+    sh->input.data[sh->input.in] = item;
+    sh->input.in = (sh->input.in + 1) % BUFFER_A_SIZE;
+
+    sem_post(&sh->input.mutex);
+    sem_post(&sh->input.full);
+}
+
+/* Insert a termination record into Buffer B using the normal buffer protocol. */
+static void send_consumer_termination(shared_t *sh)
+{
+    result_t result;
+    result.id = TERMINATION_ID;
+    result.producer_id = -1;
+    result.worker_id = -1;
+    result.result = 0;
+
+    sem_wait(&sh->output.empty);
+    sem_wait(&sh->output.mutex);
+
+    sh->output.data[sh->output.in] = result;
+    sh->output.in = (sh->output.in + 1) % BUFFER_B_SIZE;
+
+    sem_post(&sh->output.mutex);
+    sem_post(&sh->output.full);
+}
+
+/* Wait for one child and verify that it exited successfully. */
+static int wait_for_child(pid_t pid)
+{
+    int status;
+
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
+        return 0;
+    }
+
+    return WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS;
 }
 
 /* Create shared resources, launch all roles, verify results, and clean up. */
@@ -126,49 +259,139 @@ int main(void)
         return EXIT_FAILURE;
     }
 
-    int created = 0;
+    pid_t producer_pids[NUM_PRODUCERS];
+    pid_t worker_pids[NUM_WORKERS];
+    pid_t consumer_pids[NUM_CONSUMERS];
+    int child_status_ok = 1;
 
     for (int i = 0; i < NUM_PRODUCERS; ++i) {
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); exit(EXIT_FAILURE); }
         if (pid == 0) { producer(sh, i); _exit(EXIT_SUCCESS); }
-        ++created;
+        producer_pids[i] = pid;
     }
 
     for (int i = 0; i < NUM_WORKERS; ++i) {
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); exit(EXIT_FAILURE); }
         if (pid == 0) { worker(sh, i); _exit(EXIT_SUCCESS); }
-        ++created;
+        worker_pids[i] = pid;
     }
 
     for (int i = 0; i < NUM_CONSUMERS; ++i) {
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); exit(EXIT_FAILURE); }
         if (pid == 0) { consumer(sh, i); _exit(EXIT_SUCCESS); }
-        ++created;
+        consumer_pids[i] = pid;
     }
 
-    /* All process groups must be started before waiting for children.
-       TODO: add any parent-side actions required by your termination
-       protocol at the appropriate point; do not wait for a process that
-       still needs a termination action from the parent. */
-    /* TODO: collect and check each child's exit status, rather than
-       discarding it with wait(NULL). */
-    for (int i = 0; i < created; ++i)
-        wait(NULL);
+    /* Wait only for producers first. Workers and consumers remain active, so
+       bounded buffers can continue draining and the pipeline cannot deadlock. */
+    for (int i = 0; i < NUM_PRODUCERS; ++i) {
+        if (!wait_for_child(producer_pids[i]))
+            child_status_ok = 0;
+    }
 
-    int verification_ok = 0;
-    /* TODO: before unmapping shared memory, verify the collected results:
-       - every ID from 0 to NUM_PRODUCERS * ITEMS_PER_PRODUCER - 1 occurs once;
-       - producer_id and result match the generated item;
-       - worker_id is within 0 .. NUM_WORKERS-1;
-       - the total is correct, with no out-of-range IDs.
-       Print the results in ascending item ID order.
-       Set verification_ok only after verification and child-status checks
-       have succeeded. This placeholder is not a completed verifier. */
+    /* Every ordinary input item has now been inserted. Send exactly one
+       termination item to each worker. */
+    for (int i = 0; i < NUM_WORKERS; ++i)
+        send_worker_termination(sh);
 
-    /* TODO: destroy any additional semaphores you initialize. */
+    for (int i = 0; i < NUM_WORKERS; ++i) {
+        if (!wait_for_child(worker_pids[i]))
+            child_status_ok = 0;
+    }
+
+    /* Every ordinary result has now been inserted. Send exactly one
+       termination record to each consumer. */
+    for (int i = 0; i < NUM_CONSUMERS; ++i)
+        send_consumer_termination(sh);
+
+    for (int i = 0; i < NUM_CONSUMERS; ++i) {
+        if (!wait_for_child(consumer_pids[i]))
+            child_status_ok = 0;
+    }
+
+    int verification_ok = child_status_ok;
+    int total_items = NUM_PRODUCERS * ITEMS_PER_PRODUCER;
+
+    if (!child_status_ok) {
+        fprintf(stderr, "Verification failed: a child process did not exit successfully.\n");
+    }
+
+    if (sh->out_of_range_count != 0) {
+        fprintf(stderr,
+                "Verification failed: %d out-of-range result(s).\n",
+                sh->out_of_range_count);
+        verification_ok = 0;
+    }
+
+    if (sh->collected_count != total_items) {
+        fprintf(stderr,
+                "Verification failed: collected %d, expected %d.\n",
+                sh->collected_count, total_items);
+        verification_ok = 0;
+    }
+
+    /* records[id] is indexed by ID, so results are printed in ascending order. */
+    for (int id = 0; id < total_items; ++id) {
+        int expected_producer = id / ITEMS_PER_PRODUCER;
+        long expected_result = (long)(id + 1) * (id + 1);
+
+        if (sh->seen[id] != 1) {
+            fprintf(stderr,
+                    "Verification failed: ID %d occurred %d time(s).\n",
+                    id, sh->seen[id]);
+            verification_ok = 0;
+            continue;
+        }
+
+        if (sh->records[id].id != id) {
+            fprintf(stderr,
+                    "Verification failed: stored ID for position %d is incorrect.\n",
+                    id);
+            verification_ok = 0;
+            continue;
+        }
+
+        if (sh->records[id].producer_id != expected_producer) {
+            fprintf(stderr,
+                    "Verification failed: producer ID for item %d is incorrect.\n",
+                    id);
+            verification_ok = 0;
+            continue;
+        }
+
+        if (sh->records[id].worker_id < 0 ||
+            sh->records[id].worker_id >= NUM_WORKERS) {
+            fprintf(stderr,
+                    "Verification failed: worker ID for item %d is out of range.\n",
+                    id);
+            verification_ok = 0;
+            continue;
+        }
+
+        if (sh->records[id].result != expected_result) {
+            fprintf(stderr,
+                    "Verification failed: result for item %d is incorrect.\n",
+                    id);
+            verification_ok = 0;
+            continue;
+        }
+
+        printf("id=%d producer=%d worker=%d result=%ld\n",
+               sh->records[id].id,
+               sh->records[id].producer_id,
+               sh->records[id].worker_id,
+               sh->records[id].result);
+    }
+
+    if (verification_ok) {
+        printf("Verification successful: all %d results are correct.\n",
+               total_items);
+    }
+
+    sem_destroy(&sh->records_mutex);
     sem_destroy(&sh->input.mutex);
     sem_destroy(&sh->input.empty);
     sem_destroy(&sh->input.full);
@@ -178,8 +401,9 @@ int main(void)
     munmap(sh, sizeof(*sh));
 
     if (!verification_ok) {
-        fprintf(stderr, "Starter incomplete or verification failed.\n");
+        fprintf(stderr, "Verification failed.\n");
         return EXIT_FAILURE;
     }
+
     return EXIT_SUCCESS;
 }
