@@ -15,8 +15,7 @@
 #define NUM_WORKERS 3
 #define NUM_CONSUMERS 2
 #define ITEMS_PER_PRODUCER 4
-#define TOTAL_ITEMS \
-    (NUM_PRODUCERS * ITEMS_PER_PRODUCER)
+#define TOTAL_ITEMS (NUM_PRODUCERS * ITEMS_PER_PRODUCER)
 
 #define TERMINATION_ID (-1)
 
@@ -52,17 +51,46 @@ typedef struct {
 } output_buffer_t;
 
 typedef struct {
+    result_t first_result;
+    int occurrences;
+} result_record_t;
+
+typedef struct {
     input_buffer_t input;
     output_buffer_t output;
-    /* Shared result records used by the consumers and checked by the parent. */
-    result_t records[NUM_PRODUCERS * ITEMS_PER_PRODUCER];
-    int seen[NUM_PRODUCERS * ITEMS_PER_PRODUCER];
+    result_record_t records[TOTAL_ITEMS];
     int collected_count;
     int out_of_range_count;
     sem_t records_mutex;
 } shared_t;
 
-/* Generate this producer's input items and insert them into Buffer A. */
+/* Wait for space in the input buffer and enqueue the given item. */
+static void enqueue_input(input_buffer_t *buffer, item_t item)
+{
+    sem_wait(&buffer->empty);
+    sem_wait(&buffer->mutex);
+
+    buffer->data[buffer->in] = item;
+    buffer->in = (buffer->in + 1) % BUFFER_A_SIZE;
+
+    sem_post(&buffer->mutex);
+    sem_post(&buffer->full);
+}
+
+/* Wait for space in the output buffer and enqueue the given result. */
+static void enqueue_output(output_buffer_t *buffer, result_t result)
+{
+    sem_wait(&buffer->empty);
+    sem_wait(&buffer->mutex);
+
+    buffer->data[buffer->in] = result;
+    buffer->in = (buffer->in + 1) % BUFFER_B_SIZE;
+
+    sem_post(&buffer->mutex);
+    sem_post(&buffer->full);
+}
+
+/* Generate items for producer_id and enqueue them in sh's input buffer. */
 static void producer(shared_t *sh, int producer_id)
 {
     /* Generate each item outside the buffer's critical section. */
@@ -72,20 +100,13 @@ static void producer(shared_t *sh, int producer_id)
         item.producer_id = producer_id;
         item.value = item.id + 1;
 
-        sem_wait(&sh->input.empty);
-        sem_wait(&sh->input.mutex);
-
-        sh->input.data[sh->input.in] = item;
-        sh->input.in = (sh->input.in + 1) % BUFFER_A_SIZE;
-
-        sem_post(&sh->input.mutex);
-        sem_post(&sh->input.full);
+        enqueue_input(&sh->input, item);
     }
 
     /* The parent adds termination items after all producers have finished. */
 }
 
-/* Transfer input items through the computation stage into Buffer B. */
+/* Process sh's input items and enqueue results tagged with worker_id. */
 static void worker(shared_t *sh, int worker_id)
 {
     for (;;) {
@@ -112,19 +133,11 @@ static void worker(shared_t *sh, int worker_id)
         result.worker_id = worker_id;
         result.result = (long)item.value * item.value;
 
-        /* Insert the completed result into Buffer B. */
-        sem_wait(&sh->output.empty);
-        sem_wait(&sh->output.mutex);
-
-        sh->output.data[sh->output.in] = result;
-        sh->output.in = (sh->output.in + 1) % BUFFER_B_SIZE;
-
-        sem_post(&sh->output.mutex);
-        sem_post(&sh->output.full);
+        enqueue_output(&sh->output, result);
     }
 }
 
-/* Collect Buffer B results into synchronized shared records. */
+/* Collect results from sh's output buffer into its verification records. */
 static void consumer(shared_t *sh, int consumer_id)
 {
     (void)consumer_id;
@@ -152,11 +165,11 @@ static void consumer(shared_t *sh, int consumer_id)
         if (result.id < 0 || result.id >= TOTAL_ITEMS) {
             sh->out_of_range_count++;
         } else {
-            /* Keep the first record; seen[] counts all occurrences. */
-            if (sh->seen[result.id] == 0)
-                sh->records[result.id] = result;
+            result_record_t *record = &sh->records[result.id];
+            if (record->occurrences == 0)
+                record->first_result = result;
 
-            sh->seen[result.id]++;
+            record->occurrences++;
             sh->collected_count++;
         }
 
@@ -164,7 +177,8 @@ static void consumer(shared_t *sh, int consumer_id)
     }
 }
 
-/* Initialize the shared buffer indices and process-shared semaphores. */
+/* Reset the buffer indices and verification counts in sh and initialize its
+   process-shared semaphores. Return 0 on success or -1 on initialization failure. */
 static int init_shared(shared_t *sh)
 {
     sh->input.in = sh->input.out = 0;
@@ -172,13 +186,8 @@ static int init_shared(shared_t *sh)
     sh->collected_count = 0;
     sh->out_of_range_count = 0;
 
-    for (int i = 0; i < TOTAL_ITEMS; ++i) {
-        sh->seen[i] = 0;
-        sh->records[i].id = -1;
-        sh->records[i].producer_id = -1;
-        sh->records[i].worker_id = -1;
-        sh->records[i].result = 0;
-    }
+    for (int i = 0; i < TOTAL_ITEMS; ++i)
+        sh->records[i].occurrences = 0;
 
     if (sem_init(&sh->input.mutex, 1, 1) == -1 ||
         sem_init(&sh->input.empty, 1, BUFFER_A_SIZE) == -1 ||
@@ -194,44 +203,8 @@ static int init_shared(shared_t *sh)
     return 0;
 }
 
-/* Insert a termination item into Buffer A using the normal buffer protocol. */
-static void send_worker_termination(shared_t *sh)
-{
-    item_t item;
-    item.id = TERMINATION_ID;
-    item.producer_id = -1;
-    item.value = 0;
-
-    sem_wait(&sh->input.empty);
-    sem_wait(&sh->input.mutex);
-
-    sh->input.data[sh->input.in] = item;
-    sh->input.in = (sh->input.in + 1) % BUFFER_A_SIZE;
-
-    sem_post(&sh->input.mutex);
-    sem_post(&sh->input.full);
-}
-
-/* Insert a termination record into Buffer B using the normal buffer protocol. */
-static void send_consumer_termination(shared_t *sh)
-{
-    result_t result;
-    result.id = TERMINATION_ID;
-    result.producer_id = -1;
-    result.worker_id = -1;
-    result.result = 0;
-
-    sem_wait(&sh->output.empty);
-    sem_wait(&sh->output.mutex);
-
-    sh->output.data[sh->output.in] = result;
-    sh->output.in = (sh->output.in + 1) % BUFFER_B_SIZE;
-
-    sem_post(&sh->output.mutex);
-    sem_post(&sh->output.full);
-}
-
-/* Wait for one child and verify that it exited successfully. */
+/* Reap the child with the given PID. Return 1 for a successful exit, or 0
+   if waiting fails or the child terminates unsuccessfully. */
 static int wait_for_child(pid_t pid)
 {
     int status;
@@ -294,8 +267,9 @@ int main(void)
 
     /* Every ordinary input item has now been inserted. Send exactly one
        termination item to each worker. */
+    const item_t worker_termination = { .id = TERMINATION_ID };
     for (int i = 0; i < NUM_WORKERS; ++i)
-        send_worker_termination(sh);
+        enqueue_input(&sh->input, worker_termination);
 
     for (int i = 0; i < NUM_WORKERS; ++i) {
         if (!wait_for_child(worker_pids[i]))
@@ -304,8 +278,9 @@ int main(void)
 
     /* Every ordinary result has now been inserted. Send exactly one
        termination record to each consumer. */
+    const result_t consumer_termination = { .id = TERMINATION_ID };
     for (int i = 0; i < NUM_CONSUMERS; ++i)
-        send_consumer_termination(sh);
+        enqueue_output(&sh->output, consumer_termination);
 
     for (int i = 0; i < NUM_CONSUMERS; ++i) {
         if (!wait_for_child(consumer_pids[i]))
@@ -313,7 +288,6 @@ int main(void)
     }
 
     int verification_ok = child_status_ok;
-    int total_items = NUM_PRODUCERS * ITEMS_PER_PRODUCER;
 
     if (!child_status_ok) {
         fprintf(stderr, "Verification failed: a child process did not exit successfully.\n");
@@ -326,27 +300,29 @@ int main(void)
         verification_ok = 0;
     }
 
-    if (sh->collected_count != total_items) {
+    if (sh->collected_count != TOTAL_ITEMS) {
         fprintf(stderr,
                 "Verification failed: collected %d, expected %d.\n",
-                sh->collected_count, total_items);
+                sh->collected_count, TOTAL_ITEMS);
         verification_ok = 0;
     }
 
     /* records[id] is indexed by ID, so results are printed in ascending order. */
-    for (int id = 0; id < total_items; ++id) {
+    for (int id = 0; id < TOTAL_ITEMS; ++id) {
+        const result_record_t *record = &sh->records[id];
         int expected_producer = id / ITEMS_PER_PRODUCER;
         long expected_result = (long)(id + 1) * (id + 1);
 
-        if (sh->seen[id] != 1) {
+        if (record->occurrences != 1) {
             fprintf(stderr,
                     "Verification failed: ID %d occurred %d time(s).\n",
-                    id, sh->seen[id]);
+                    id, record->occurrences);
             verification_ok = 0;
             continue;
         }
 
-        if (sh->records[id].id != id) {
+        const result_t *stored_result = &record->first_result;
+        if (stored_result->id != id) {
             fprintf(stderr,
                     "Verification failed: stored ID for position %d is incorrect.\n",
                     id);
@@ -354,7 +330,7 @@ int main(void)
             continue;
         }
 
-        if (sh->records[id].producer_id != expected_producer) {
+        if (stored_result->producer_id != expected_producer) {
             fprintf(stderr,
                     "Verification failed: producer ID for item %d is incorrect.\n",
                     id);
@@ -362,8 +338,8 @@ int main(void)
             continue;
         }
 
-        if (sh->records[id].worker_id < 0 ||
-            sh->records[id].worker_id >= NUM_WORKERS) {
+        if (stored_result->worker_id < 0 ||
+            stored_result->worker_id >= NUM_WORKERS) {
             fprintf(stderr,
                     "Verification failed: worker ID for item %d is out of range.\n",
                     id);
@@ -371,7 +347,7 @@ int main(void)
             continue;
         }
 
-        if (sh->records[id].result != expected_result) {
+        if (stored_result->result != expected_result) {
             fprintf(stderr,
                     "Verification failed: result for item %d is incorrect.\n",
                     id);
@@ -380,15 +356,15 @@ int main(void)
         }
 
         printf("id=%d producer=%d worker=%d result=%ld\n",
-               sh->records[id].id,
-               sh->records[id].producer_id,
-               sh->records[id].worker_id,
-               sh->records[id].result);
+               stored_result->id,
+               stored_result->producer_id,
+               stored_result->worker_id,
+               stored_result->result);
     }
 
     if (verification_ok) {
         printf("Verification successful: all %d results are correct.\n",
-               total_items);
+               TOTAL_ITEMS);
     }
 
     sem_destroy(&sh->records_mutex);
