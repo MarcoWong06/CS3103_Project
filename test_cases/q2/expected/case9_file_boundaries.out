@@ -1,0 +1,48 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+
+Name:   empty.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+Name:   empty.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+Error: write docs: Is a directory
+Error: read docs: Is a directory
+Error: delete docs: Is a directory (use rmdir)
+Error: write missing.txt: No such file or directory
+Error: read missing.txt: No such file or directory
+Error: delete missing.txt: No such file or directory
+Name:   one.txt
+Type:   file
+Size:   256 bytes
+Blocks: 1
+Name:   one.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+
+  say "hi"  
+Name:   one.txt
+Type:   file
+Size:   12 bytes
+Blocks: 1
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65
+Name:   one.txt
+Type:   file
+Size:   257 bytes
+Blocks: 2
+NAME                             TYPE     SIZE
+docs                             dir         -
+one.txt                          file      257
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        67 (metadata 65 + data 2)
+Free blocks:        4029
+Metadata reserved:  65

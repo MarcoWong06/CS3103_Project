@@ -1,0 +1,52 @@
+--- write: block 67 fails ---
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65
+Error: write new.txt: disk I/O error
+Name:   new.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65
+--- append: block 66 fails ---
+Error: append keep.txt: disk I/O error
+keep
+Name:   keep.txt
+Type:   file
+Size:   4 bytes
+Blocks: 1
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65
+--- restart ---
+Name:   new.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+keep
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65
+Name:   new.txt
+Type:   file
+Size:   300 bytes
+Blocks: 2
+Name:   keep.txt
+Type:   file
+Size:   304 bytes
+Blocks: 2
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        69 (metadata 65 + data 4)
+Free blocks:        4027
+Metadata reserved:  65

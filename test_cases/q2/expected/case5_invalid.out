@@ -1,0 +1,24 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+unchanged
+Error: create kept.txt: File exists
+Error: read missing.txt: No such file or directory
+Error: create missing/file.txt: No such file or directory
+Error: create kept.txt/child.txt: Not a directory
+Error: rmdir folder: Directory not empty
+Error: rmdir /: Cannot remove root directory
+Error: create nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn: Name too long (max 31 characters)
+Usage: write <path> "<content>"
+unchanged
+Name:   kept.txt
+Type:   file
+Size:   9 bytes
+Blocks: 1
+NAME                             TYPE     SIZE
+folder                           dir         -
+kept.txt                         file        9
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        66 (metadata 65 + data 1)
+Free blocks:        4030
+Metadata reserved:  65

@@ -1,0 +1,27 @@
+No file system found; run 'format'.
+Formatted virtual_disk.bin: 4096 blocks x 256 bytes (65 metadata, 4031 data)
+Error: append nofile.txt: No such file or directory
+Error: append docs: Is a directory
+Name:   e.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+hi there
+Name:   e.txt
+Type:   file
+Size:   8 bytes
+Blocks: 1
+Name:   t.txt
+Type:   file
+Size:   260 bytes
+Blocks: 2
+TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTUUUUUUUUUU
+Name:   t.txt
+Type:   file
+Size:   512 bytes
+Blocks: 2
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        68 (metadata 65 + data 3)
+Free blocks:        4028
+Metadata reserved:  65

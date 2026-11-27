@@ -1,0 +1,54 @@
+--- write ---
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        67 (metadata 65 + data 2)
+Free blocks:        4029
+Metadata reserved:  65
+Error: write new.txt: disk I/O error
+Name:   new.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        67 (metadata 65 + data 2)
+Free blocks:        4029
+Metadata reserved:  65
+--- delete ---
+Error: delete keep.txt: disk I/O error
+Name:   keep.txt
+Type:   file
+Size:   300 bytes
+Blocks: 2
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        67 (metadata 65 + data 2)
+Free blocks:        4029
+Metadata reserved:  65
+--- mkdir ---
+Error: mkdir docs: disk I/O error
+NAME                             TYPE     SIZE
+keep.txt                         file      300
+new.txt                          file        0
+--- restart ---
+NAME                             TYPE     SIZE
+keep.txt                         file      300
+new.txt                          file        0
+Name:   new.txt
+Type:   file
+Size:   0 bytes
+Blocks: 0
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        67 (metadata 65 + data 2)
+Free blocks:        4029
+Metadata reserved:  65
+NAME                             TYPE     SIZE
+docs                             dir         -
+new.txt                          file      600
+Block size:         256 bytes
+Total blocks:       4096
+Used blocks:        68 (metadata 65 + data 3)
+Free blocks:        4028
+Metadata reserved:  65

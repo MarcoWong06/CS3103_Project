@@ -51,3 +51,62 @@ completing the relevant TODOs. These examples do not cover the entire testing
 section. In particular, test disk exhaustion and a failed multi-block write
 using your documented allocation layout and file capacity; verify that a
 failed operation leaves existing content, metadata and free-space state intact.
+
+------------------------------------------------------------------------
+Additional regression cases (minifs implementation)
+
+Run from the repository root on Linux (for example in Docker):
+  bash test_cases/q2/run_tests.sh              all cases
+  bash test_cases/q2/run_tests.sh case7_boundaries case12_corrupt
+Each case runs in a fresh directory; its output is compared with
+test_cases/q2/expected/<case>.out and virtual_disk.bin must stay 1 MiB.
+
+case0_format
+  Every command before format on a missing disk reports an error; format; df;
+  restart; df; re-format.
+case7_boundaries.txt
+  31-character name accepted, 32 rejected; ".", ".." and "/" rejected as new
+  names; cd .. at the root; cd into a file; rmdir of ., the current
+  directory, the root, a non-empty directory and a file; 300-character path
+  component; df unchanged by the failures.
+case8_deep_paths
+  127 nested 31-character directories, pwd of the deepest, entry-table
+  exhaustion, stat by the full absolute path.
+case9_file_boundaries.txt
+  read/write/delete on a directory or missing file fail; empty-file read and
+  stat; write "" frees all blocks; spaces and quotes stored byte for byte;
+  freed blocks are reused.
+case10_append.txt
+  append to a missing file or a directory fails; append to an empty file;
+  tail fill crossing a block boundary; tail fill that exactly fills a block.
+case11_disk_full
+  Fill the disk to one free block; oversized write/append fail without
+  changing anything; exact fit succeeds; delete frees space; restart shows
+  the same state.
+case12_corrupt
+  Truncated image, bad magic, FAT entry pointing into the metadata region and
+  an out-of-range parent_id, a root with a non-zero size, a FAT cycle, a
+  file size that disagrees with its block chain and a name with no NUL
+  terminator: each reports an invalid image and rejects commands without
+  crashing; format then succeeds.
+case13_scattered
+  Interleaved appends to two files give a file non-contiguous blocks
+  (65, 67, 69); after deleting the other file a new file reuses the gaps
+  (66, 68, 70); read/stat/df are correct, also after a restart.
+case14_format_fail
+  Mid-session, virtual_disk.bin is replaced by a directory so format cannot
+  open it: format reports an I/O error and the mounted file system stays
+  usable; after the original disk is put back, a restart reads the same file.
+case15_write_fault and case16_flush_fault (Linux only; skipped elsewhere)
+  The runner builds fault_fwrite.c into an LD_PRELOAD library. With
+  MINIFS_FAIL_AT=<byte offset> set, the first write to the disk at that offset
+  fails once with EIO, so the rollback's own metadata flush still succeeds.
+  case15: data-write failures. A write fails on its second new block (67) and
+  an append fails on its new tail block (66). case16: metadata-flush
+  failures. The entry-table write (byte 8448) fails after the new FAT has been
+  written, for write, delete and mkdir. Each command reports a disk I/O error,
+  and stat, ls and df show the earlier sizes, block counts and free space,
+  both in the session and after a restart. Then the same commands succeed.
+
+A non-zero minifs exit status adds a "minifs exited with status N" line to
+the output, so the case fails.
