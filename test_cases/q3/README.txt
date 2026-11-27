@@ -13,6 +13,10 @@ Each invocation runs the five configurations in the order stated in the
 specification: FCFS, SJF, preemptive Priority, RR q=3, RR q=6. Base scheduling
 on the input arrival and burst times, as described in the document.
 
+Build and run the CLI regression tests with these commands.
+  make problem3
+  python3 test_cases/q3/run_tests.py
+
 case1.txt  The document's five jobs; compare with your hand calculations.
 case2.txt  Idle periods between groups of arrivals.
 case3.txt  Equal burst times; apply each algorithm's stated selection rules.
